@@ -449,7 +449,7 @@ const SECURITY_HEADERS = {
   'referrer-policy': 'strict-origin-when-cross-origin', // Nominatim needs to know which site is asking
   'permissions-policy': 'camera=(self), geolocation=(self), microphone=()',
   'content-security-policy':
-    "default-src 'self'; img-src 'self' data: https://tile.openstreetmap.org; style-src 'self' 'unsafe-inline'; connect-src 'self' https://nominatim.openstreetmap.org; media-src 'self' blob:; frame-ancestors 'none'; base-uri 'none'",
+    "default-src 'self'; img-src 'self' data: https://tile.openstreetmap.org; style-src 'self' 'unsafe-inline'; connect-src 'self' https://nominatim.openstreetmap.org https://tile.openstreetmap.org; media-src 'self' blob:; frame-ancestors 'none'; base-uri 'none'",
 };
 
 function serveStatic(path: string, res: ServerResponse) {

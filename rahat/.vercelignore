@@ -1,0 +1,7 @@
+# Never upload local secrets or data to Vercel (the site only needs the source to build).
+.env
+.env.*
+!.env.example
+server/data
+dist
+tests

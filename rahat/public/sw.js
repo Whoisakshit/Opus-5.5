@@ -2,7 +2,7 @@
 // when there is signal and the app still opens when there is none.
 // Map tiles: cache first, and only tiles the user has already viewed (OSM's
 // tile policy forbids bulk pre-downloading). API calls are never cached.
-const APP = 'rahat-app-v1';
+const APP = 'rahat-app-v2';
 const TILES = 'rahat-tiles-v1';
 const MAX_TILES = 400;
 
@@ -11,7 +11,14 @@ self.addEventListener('install', (e) => {
   self.skipWaiting();
 });
 
-self.addEventListener('activate', (e) => e.waitUntil(self.clients.claim()));
+self.addEventListener('activate', (e) =>
+  e.waitUntil(
+    caches
+      .keys()
+      .then((keys) => Promise.all(keys.filter((k) => k.startsWith('rahat-app-') && k !== APP).map((k) => caches.delete(k))))
+      .then(() => self.clients.claim()),
+  ),
+);
 
 async function trimTiles() {
   const c = await caches.open(TILES);
@@ -24,16 +31,21 @@ self.addEventListener('fetch', (e) => {
   if (e.request.method !== 'GET' || url.pathname.startsWith('/api/')) return;
 
   if (url.hostname === 'tile.openstreetmap.org') {
+    // Note: this fetch runs inside the worker, so the page's connect-src must allow the tile host.
     e.respondWith(
       caches.open(TILES).then(async (c) => {
         const hit = await c.match(e.request);
         if (hit) return hit;
-        const res = await fetch(e.request);
-        if (res.ok || res.type === 'opaque') {
-          c.put(e.request, res.clone());
-          trimTiles();
+        try {
+          const res = await fetch(e.request);
+          if (res.ok || res.type === 'opaque') {
+            c.put(e.request, res.clone());
+            trimTiles();
+          }
+          return res;
+        } catch {
+          return Response.error(); // offline and not cached: Leaflet just shows an empty tile
         }
-        return res;
       }),
     );
     return;

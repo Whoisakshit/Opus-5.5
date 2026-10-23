@@ -24,7 +24,7 @@
         { "key": "Permissions-Policy", "value": "camera=(), geolocation=(self), microphone=()" },
         {
           "key": "Content-Security-Policy",
-          "value": "default-src 'self'; img-src 'self' data: https://tile.openstreetmap.org; style-src 'self' 'unsafe-inline'; connect-src 'self' https://nominatim.openstreetmap.org; frame-ancestors 'none'; base-uri 'none'"
+          "value": "default-src 'self'; img-src 'self' data: https://tile.openstreetmap.org; style-src 'self' 'unsafe-inline'; connect-src 'self' https://nominatim.openstreetmap.org https://tile.openstreetmap.org; frame-ancestors 'none'; base-uri 'none'"
         }
       ]
     }
