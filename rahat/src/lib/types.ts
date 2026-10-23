@@ -1,6 +1,6 @@
 // Domain model. Everything that happens is an immutable event with an id made on
 // the device that created it. State is derived by replaying events (see reduce.ts),
-// so the same report arriving by internet, SMS and QR relay is counted once.
+// so the same report arriving by internet and by SMS is counted once.
 
 export type Item = 'food' | 'water' | 'blankets' | 'medicine';
 export const ITEMS: Item[] = ['food', 'water', 'blankets', 'medicine'];

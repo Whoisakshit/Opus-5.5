@@ -1,6 +1,5 @@
-// One message format, three ways to travel. The same short text can go by SMS,
-// inside a QR code that a driver or rescue team carries back into coverage, or
-// be read out over police wireless. It keeps the event id, so if the same
+// A compact request format that fits in one SMS (or can be read out over police
+// wireless). It keeps the event id, so if the same
 // report later also arrives over the internet it is counted once.
 //
 //   RAHAT R k3f9q2m1xa c=MLD t=mb8c3k p=210 v=46.30.4 f=420 w=160 b=90 m=6 x=MT l=30.3297,78.1468 a=12 s=g n=GIC_Maldevta *4Q

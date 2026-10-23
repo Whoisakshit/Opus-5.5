@@ -4,8 +4,8 @@
 //   public  the requests this phone made for its camp(s), proven by a secret key per camp
 //   staff   the signed-in staff member's full view
 // Every action is written to the phone first (outbox) and sent when the network
-// allows. Events keep the id they were born with, so retries and the SMS/QR
-// fallbacks never double count.
+// allows. Events keep the id they were born with, so retries and the SMS
+// fallback never double count.
 
 import { useSyncExternalStore } from 'react';
 import type { Ev } from './types.ts';

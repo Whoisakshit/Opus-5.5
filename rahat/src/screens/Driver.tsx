@@ -9,7 +9,7 @@ import { TRUCKS, WAREHOUSE } from '../lib/config.ts';
 import { ago, distanceM, km } from '../lib/format.ts';
 import type { MapPoint } from '../components/Dashboard.tsx';
 import { DashStats, FocusMap, NewAlert, useNewItems } from '../components/Dashboard.tsx';
-import { DeliverBox, Directions, LiveLocation, RelayCard, TakeLoad } from '../components/Field.tsx';
+import { DeliverBox, Directions, LiveLocation, TakeLoad } from '../components/Field.tsx';
 import { Badge, Empty, Notice, QtyView, qtyLine, useNow } from '../components/ui.tsx';
 
 const ROLE = 'driver';
@@ -106,7 +106,6 @@ export function DriverScreen({ unit, asAdmin }: { unit?: string; asAdmin?: boole
               <FocusMap points={points} me={live} />
             </section>
             {!asAdmin && <LiveLocation role="driver" unit={truck.id} />}
-            <RelayCard role={ROLE} state={state} />
             {delivered.length > 0 && (
               <section className="stack-sm" aria-labelledby="done">
                 <h2 className="card-title" id="done">Delivered</h2>

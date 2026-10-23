@@ -9,7 +9,7 @@ import { carrierLabel } from '../lib/config.ts';
 import { ago, distanceM, km } from '../lib/format.ts';
 import type { MapPoint } from '../components/Dashboard.tsx';
 import { DashStats, FocusMap, NewAlert, useNewItems } from '../components/Dashboard.tsx';
-import { DeliverBox, LiveLocation, RelayCard, TakeLoad } from '../components/Field.tsx';
+import { DeliverBox, LiveLocation, TakeLoad } from '../components/Field.tsx';
 import { Badge, Empty, Notice, NumberInput, QtyView, useNow } from '../components/ui.tsx';
 
 const ROLE = 'rescue';
@@ -102,7 +102,6 @@ export function RescueScreen({ unit, asAdmin }: { unit?: string; asAdmin?: boole
               <FocusMap points={points} me={live} />
             </section>
             {!asAdmin && <LiveLocation role="rescue" unit={team.id} />}
-            <RelayCard role={ROLE} state={state} />
           </div>
         </div>
       </div>

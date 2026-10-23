@@ -12,7 +12,7 @@ import {
   PaperPlaneTilt,
   PhoneCall,
   Plus,
-  QrCode,
+  ChatText,
   WifiMedium,
 } from '@phosphor-icons/react';
 import type { CampCheckin, CampReport, DispatchReceive, Ev, Qty } from '../lib/types.ts';
@@ -24,36 +24,34 @@ import { myCampIds, record, registerCamp, useStore } from '../lib/store.ts';
 import type { NetState } from '../lib/net.ts';
 import { useNetwork } from '../lib/net.ts';
 import { CONTROL_ROOM_SMS, EMERGENCY, carrierLabel } from '../lib/config.ts';
-import { ago, fmtCoord } from '../lib/format.ts';
+import { ITEMS } from '../lib/types.ts';
+import { fmtCoord } from '../lib/format.ts';
+import { agoIn, useT } from '../lib/i18n.ts';
+import type { Strings } from '../lib/i18n.ts';
 import { placeName } from '../lib/geocode.ts';
 import type { Picked } from '../components/Map.tsx';
 import { LocationPicker } from '../components/Map.tsx';
 import { SendOptions } from '../components/Codes.tsx';
-import { Badge, NumberInput, Notice, QtyInputs, QtyView, qtyLine, useNow } from '../components/ui.tsx';
+import { Badge, NumberInput, Notice, QtyInputs, QtyView, useNow } from '../components/ui.tsx';
 
 const SCOPE = 'public';
 const ENCODABLE = new Set<Ev['type']>(['camp.report', 'camp.checkin', 'dispatch.receive']);
 
-const STATUS: Record<DispatchState['status'], [string, 'blue' | 'green' | 'red']> = {
-  approved: ['Approved', 'blue'],
-  packed: ['Packed', 'blue'],
-  in_transit: ['On the way', 'blue'],
-  blocked: ['Road blocked', 'red'],
-  delivered: ['Delivered', 'green'],
-  received: ['Received', 'green'],
+const TONE: Record<DispatchState['status'], 'blue' | 'green' | 'red'> = {
+  approved: 'blue',
+  packed: 'blue',
+  in_transit: 'blue',
+  blocked: 'red',
+  delivered: 'green',
+  received: 'green',
 };
 
-const STATUS_TEXT: Record<DispatchState['status'], string> = {
-  approved: 'Approved by the control room. Being packed at the warehouse.',
-  packed: 'Packed and waiting for a truck.',
-  in_transit: 'On the way to you.',
-  blocked: 'The road is blocked. A rescue team will carry it to you on foot.',
-  delivered: 'Marked delivered. Please count it and confirm below.',
-  received: 'Received.',
-};
+/** "120 food, 40 water" in the chosen language. */
+const needList = (t: Strings, q: Qty) => t.list(ITEMS.filter((k) => q[k] > 0).map((k) => `${q[k].toLocaleString('en-IN')} ${t.itemsLower[k]}`));
 
 export function RequestScreen() {
   const { box, state } = useStore(SCOPE);
+  const t = useT();
   const net = useNetwork(box);
   const now = useNow();
   const mine = myCampIds().filter((id) => state.camps.has(id));
@@ -74,22 +72,18 @@ export function RequestScreen() {
       <div className="wrap stack">
         <div className="row-between" style={{ alignItems: 'flex-end' }}>
           <div>
-            <h1 className="page-title">{camp ? camp.name : 'Request help'}</h1>
-            <p className="page-sub">
-              {camp
-                ? 'Your request and everything on its way to you. Keep this page; it works offline.'
-                : 'Tell the control room where you are and what you need. It takes about two minutes.'}
-            </p>
+            <h1 className="page-title">{camp ? camp.name : t.requestHelp}</h1>
+            <p className="page-sub">{camp ? t.subExisting : t.subNew}</p>
           </div>
           {mine.length > 0 && (
-            <div className="row" role="group" aria-label="Your requests">
+            <div className="row" role="group" aria-label={t.yourRequests}>
               {mine.map((id) => (
                 <button key={id} type="button" className={`btn btn-sm${active === id ? ' btn-selected' : ''}`} aria-pressed={active === id} onClick={() => setActive(id)}>
                   {state.camps.get(id)?.name}
                 </button>
               ))}
               <button type="button" className={`btn btn-sm${active === 'new' ? ' btn-selected' : ''}`} aria-pressed={active === 'new'} onClick={() => setActive('new')}>
-                <Plus size={16} aria-hidden /> Another place
+                <Plus size={16} aria-hidden /> {t.anotherPlace}
               </button>
             </div>
           )}
@@ -106,7 +100,7 @@ export function RequestScreen() {
             {camp && <Checkin camp={camp} />}
           </div>
 
-          <aside className="stack req-aside" aria-label="Help with sending">
+          <aside className="stack req-aside" aria-label={t.helpTitle}>
             {pending.length > 0 && <Outbox events={pending} open={net !== 'online'} now={now} />}
             <SignalHelp />
             <Emergency />
@@ -118,13 +112,14 @@ export function RequestScreen() {
 }
 
 function NetBanner({ net, pending }: { net: NetState; pending: number }) {
+  const t = useT();
   if (net === 'offline')
     return (
       <div className="notice notice-amber" role="status">
         <CloudSlash size={18} weight="fill" aria-hidden />
         <div>
-          <b>No connection right now.</b> Fill in the form anyway. It is saved on this phone and sends by itself when signal returns.
-          {pending > 0 && ' If it is urgent, use "Send by SMS" or show the QR code.'}
+          <b>{t.offlineBold}</b> {t.offlineText}
+          {pending > 0 && t.offlineUrgent}
         </div>
       </div>
     );
@@ -133,7 +128,9 @@ function NetBanner({ net, pending }: { net: NetState; pending: number }) {
       <div className="notice notice-amber" role="status">
         <WifiMedium size={18} weight="fill" aria-hidden />
         <div>
-          <b>Weak connection.</b> We keep trying in the background{pending > 0 ? '. SMS is the faster option right now.' : '.'}
+          <b>{t.weakBold}</b>
+          {t.weakText}
+          {pending > 0 ? t.weakSms : t.stop}
         </div>
       </div>
     );
@@ -144,35 +141,32 @@ function StatusCard({ camp, state, sent, now }: { camp: CampState; state: State;
   const r = camp.report;
   const task = [...state.tasks.values()].find((t) => t.campId === camp.id && t.status !== 'done');
   const team = task ? state.teams.find((t) => t.id === task.teamId) : undefined;
+  const t = useT();
   return (
     <section className="card card-pad stack-sm" aria-labelledby="status-title">
       <h2 className="card-title" id="status-title">
-        Your request
+        {t.statusTitle}
       </h2>
       <ul className="status-list">
         <li className={sent ? 'ok' : 'wait'}>
           {sent ? <CheckCircle size={20} weight="fill" aria-hidden /> : <Clock size={20} aria-hidden />}
-          <span>{sent ? `The control room has it. Sent ${ago(r.at, now)}.` : 'Saved on this phone. It sends when there is signal.'}</span>
+          <span>{sent ? t.sent(agoIn(t.lang, r.at, now)) : t.notSent}</span>
         </li>
         <li className={camp.verified ? 'ok' : 'wait'}>
           {camp.verified ? <CheckCircle size={20} weight="fill" aria-hidden /> : <PhoneCall size={20} aria-hidden />}
           <span>
-            {camp.verified
-              ? 'Confirmed by the control room.'
-              : `Waiting to be confirmed.${r.phone ? ` Keep ${r.phone} switched on; they may call you.` : ''}`}
+            {camp.verified ? t.verified : t.waitingVerify(r.phone)}
           </span>
         </li>
         {team && task && (
           <li className="ok">
             <CheckCircle size={20} weight="fill" aria-hidden />
-            <span>
-              {team.label} is {task.status === 'on_site' ? 'with you' : 'on the way to you'}.
-            </span>
+            <span>{t.teamComing(team.label, task.status === 'on_site')}</span>
           </li>
         )}
       </ul>
       {totalQty(camp.need) > 0 && (
-        <p className="small muted">Still needed after what is on the way: {qtyLine(camp.need)}.</p>
+        <p className="small muted">{t.stillNeeded(needList(t, camp.need))}</p>
       )}
     </section>
   );
@@ -180,27 +174,28 @@ function StatusCard({ camp, state, sent, now }: { camp: CampState; state: State;
 
 function Outbox({ events, open: startOpen, now }: { events: Encodable[]; open: boolean; now: number }) {
   const [open, setOpen] = useState<string | null>(startOpen ? events.at(-1)!.id : null);
+  const t = useT();
   return (
     <section className="card card-pad" aria-labelledby="outbox-title">
       <div className="card-head">
         <h2 className="card-title" id="outbox-title">
-          <PaperPlaneTilt size={20} aria-hidden /> Not sent yet
+          <PaperPlaneTilt size={20} aria-hidden /> {t.outboxTitle}
         </h2>
         <Badge tone="amber">{events.length}</Badge>
       </div>
       <p className="muted small" style={{ marginBottom: 12 }}>
-        Safe on this phone. If it is urgent, send it another way now.
+        {t.outboxText}
       </p>
       <div className="stack-sm">
         {events.map((e) => (
           <div key={e.id} className="subtle">
             <div className="row-between">
               <span style={{ fontWeight: 600 }}>
-                {e.type === 'camp.report' ? 'Request' : e.type === 'camp.checkin' ? 'Check-in' : 'Delivery receipt'}
-                <span className="muted" style={{ fontWeight: 400 }}> {ago(e.at, now)}</span>
+                {e.type === 'camp.report' ? t.kindReport : e.type === 'camp.checkin' ? t.kindCheckin : t.kindReceipt}
+                <span className="muted" style={{ fontWeight: 400 }}> {agoIn(t.lang, e.at, now)}</span>
               </span>
               <button type="button" className="btn btn-sm btn-quiet" aria-expanded={open === e.id} onClick={() => setOpen(open === e.id ? null : e.id)}>
-                {open === e.id ? 'Hide' : 'Send another way'}
+                {open === e.id ? t.hide : t.sendAnother}
               </button>
             </div>
             {open === e.id && (
@@ -216,33 +211,40 @@ function Outbox({ events, open: startOpen, now }: { events: Encodable[]; open: b
 }
 
 function SignalHelp() {
+  const t = useT();
   return (
     <section className="card card-pad stack-sm" aria-labelledby="signal-help">
       <h2 className="card-title" id="signal-help">
-        <QrCode size={20} aria-hidden /> If your request will not send
+        <ChatText size={20} aria-hidden /> {t.helpTitle}
       </h2>
       <ol className="mini-steps">
-        <li>Keep this page open. It retries by itself.</li>
+        <li>{t.help1}</li>
         <li>
-          With phone signal but no data, press <b>Send another way</b> then <b>Send by SMS</b>
-          {CONTROL_ROOM_SMS ? ` (to ${CONTROL_ROOM_SMS})` : ''}.
+          {t.help2[0]}
+          <b>{t.help2[1]}</b>
+          {t.help2[2]}
+          <b>{t.help2[3]}</b>
+          {CONTROL_ROOM_SMS ? t.help2To(CONTROL_ROOM_SMS) : ''}
+          {t.help2[4]}
         </li>
-        <li>With no signal at all, show the QR code to any relief truck or rescue team.</li>
+        <li>{t.help3}</li>
       </ol>
     </section>
   );
 }
 
 function Emergency() {
+  const t = useT();
+  const labels = [t.sosLabels['112'], t.sosLabels.state, t.sosLabels.district];
   return (
     <section className="sos sos-compact" aria-labelledby="sos-side">
-      <h2 id="sos-side">Life in danger? Call now</h2>
+      <h2 id="sos-side">{t.sosTitle}</h2>
       <ul className="sos-list">
-        {EMERGENCY.map((n) => (
+        {EMERGENCY.map((n, i) => (
           <li key={n.number}>
             <a href={`tel:${n.number}`}>
               <span className="sos-num">{n.number}</span>
-              <span>{n.label}</span>
+              <span>{labels[i] ?? n.label}</span>
               <PhoneCall size={18} aria-hidden />
             </a>
           </li>
@@ -256,7 +258,8 @@ function Delivery({ d }: { d: DispatchState }) {
   const [count, setCount] = useState<Qty>(currentLoad(d));
   const [confirming, setConfirming] = useState(false);
   const canConfirm = d.status === 'in_transit' || d.status === 'blocked' || d.status === 'delivered';
-  const [label, tone] = STATUS[d.status];
+  const t = useT();
+  const tone = TONE[d.status];
 
   const confirm = () => {
     const ev: DispatchReceive = { type: 'dispatch.receive', id: newId(), at: Date.now(), by: 'camp', dispatchId: d.id, campId: d.campId, items: count };
@@ -268,42 +271,42 @@ function Delivery({ d }: { d: DispatchState }) {
     <section className="card card-pad" aria-label={`Delivery ${d.id}`}>
       <div className="card-head">
         <h2 className="card-title">
-          <Package size={20} aria-hidden /> Supplies coming to you
+          <Package size={20} aria-hidden /> {t.coming}
         </h2>
-        <Badge tone={tone}>{label}</Badge>
+        <Badge tone={tone}>{t.status[d.status]}</Badge>
       </div>
       <div className="stack-sm">
-        <QtyView q={currentLoad(d)} />
+        <QtyView q={currentLoad(d)} names={t.items} />
         <p className="small muted">
-          {STATUS_TEXT[d.status]}
-          {d.loads.length > 0 && d.status !== 'delivered' ? ` With ${carrierLabel(d.loads.at(-1)!.carrier)}.` : ''}
+          {t.statusText[d.status]}
+          {d.loads.length > 0 && d.status !== 'delivered' ? t.withCarrier(carrierLabel(d.loads.at(-1)!.carrier)) : ''}
         </p>
         {d.code && (
           <div className="subtle row-between">
             <span>
-              <span className="label">Handover code</span>
+              <span className="label">{t.handover}</span>
               <br />
-              <span className="small muted">Say it to the driver only once the goods are with you.</span>
+              <span className="small muted">{t.handoverHelp}</span>
             </span>
             <span className="handover">{d.code}</span>
           </div>
         )}
         {canConfirm && !confirming && (
           <button type="button" className="btn btn-primary" onClick={() => setConfirming(true)}>
-            <CheckCircle size={18} aria-hidden /> We received it. Count and confirm
+            <CheckCircle size={18} aria-hidden /> {t.gotIt}
           </button>
         )}
         {confirming && (
           <div className="stack-sm">
-            <p className="label">Count what actually arrived</p>
-            <QtyInputs idPrefix={`recv-${d.id}`} value={count} onChange={setCount} />
-            <p className="help">If anything is short, the control room can see at which handover it went missing.</p>
+            <p className="label">{t.countLabel}</p>
+            <QtyInputs idPrefix={`recv-${d.id}`} value={count} onChange={setCount} names={t.items} units={t.units} />
+            <p className="help">{t.countHelp}</p>
             <div className="row">
               <button type="button" className="btn btn-primary" onClick={confirm}>
-                Confirm receipt
+                {t.confirmReceipt}
               </button>
               <button type="button" className="btn" onClick={() => setConfirming(false)}>
-                Cancel
+                {t.cancel}
               </button>
             </div>
           </div>
@@ -313,7 +316,11 @@ function Delivery({ d }: { d: DispatchState }) {
   );
 }
 
+type GpsState = 'idle' | 'busy' | 'none' | 'denied' | 'nofix';
+type FormError = 'errName' | 'errLoc' | 'errPeople' | 'errSum' | 'errPhone';
+
 function ReportForm({ camp, onSent }: { camp?: CampState; onSent: (campId: string) => void }) {
+  const t = useT();
   const r = camp?.report;
   const isNew = !camp;
   const [name, setName] = useState(r?.name ?? '');
@@ -337,7 +344,7 @@ function ReportForm({ camp, onSent }: { camp?: CampState; onSent: (campId: strin
     });
   };
   const [typing, setTyping] = useState(false);
-  const [gps, setGps] = useState<'idle' | 'busy' | string>('idle');
+  const [gps, setGps] = useState<GpsState>('idle');
   const [people, setPeople] = useState(camp?.people ?? 0);
   const [children, setChildren] = useState(r?.children ?? 0);
   const [elderly, setElderly] = useState(r?.elderly ?? 0);
@@ -349,35 +356,30 @@ function ReportForm({ camp, onSent }: { camp?: CampState; onSent: (campId: strin
   const [trapped, setTrapped] = useState(r?.trapped ?? false);
   const [roadBlocked, setRoadBlocked] = useState(r?.roadBlocked ?? false);
   const [note, setNote] = useState('');
-  const [errors, setErrors] = useState<string[]>([]);
+  const [errors, setErrors] = useState<FormError[]>([]);
   const [sent, setSent] = useState(false);
 
   const useGps = () => {
-    if (!('geolocation' in navigator)) return setGps('This phone cannot share its location. Tap the map instead.');
+    if (!('geolocation' in navigator)) return setGps('none');
     setGps('busy');
     navigator.geolocation.getCurrentPosition(
       (p) => {
         setLoc({ lat: p.coords.latitude, lng: p.coords.longitude, acc: p.coords.accuracy, src: 'gps' });
         setGps('idle');
       },
-      (err) =>
-        setGps(
-          err.code === err.PERMISSION_DENIED
-            ? 'Location permission is off. Allow it in your browser, or tap the map.'
-            : 'No GPS fix yet. Step outside, wait a moment and try again, or tap the map.',
-        ),
+      (err) => setGps(err.code === err.PERMISSION_DENIED ? 'denied' : 'nofix'),
       { enableHighAccuracy: true, timeout: 20_000, maximumAge: 60_000 },
     );
   };
 
   const submit = (e: FormEvent) => {
     e.preventDefault();
-    const errs: string[] = [];
-    if (name.trim().length < 3) errs.push('Enter the name of the place, for example the school or village.');
-    if (!loc) errs.push('Set your location: press "Use GPS", tap the map, or type coordinates.');
-    if (people < 1) errs.push('Enter how many people are with you.');
-    if (children + elderly + injured > people) errs.push('Children, elderly and injured cannot add up to more than the total.');
-    if (phone && !/^\+?[0-9 ()-]{6,20}$/.test(phone.trim())) errs.push('Check the phone number. Use digits only, with +91 if you like.');
+    const errs: FormError[] = [];
+    if (name.trim().length < 3) errs.push('errName');
+    if (!loc) errs.push('errLoc');
+    if (people < 1) errs.push('errPeople');
+    if (children + elderly + injured > people) errs.push('errSum');
+    if (phone && !/^\+?[0-9 ()-]{6,20}$/.test(phone.trim())) errs.push('errPhone');
     setErrors(errs);
     if (errs.length || !loc) {
       requestAnimationFrame(() => document.getElementById('report-errors')?.focus());
@@ -419,20 +421,18 @@ function ReportForm({ camp, onSent }: { camp?: CampState; onSent: (campId: strin
     <form className="card card-pad stack" onSubmit={submit} noValidate aria-labelledby="report-title">
       <div>
         <h2 className="card-title" id="report-title">
-          <MapPin size={20} aria-hidden /> {isNew ? 'Where are you, and what do you need?' : 'Update your request'}
+          <MapPin size={20} aria-hidden /> {isNew ? t.formNew : t.formUpdate}
         </h2>
         <p className="muted small" style={{ marginTop: 4 }}>
-          {isNew
-            ? 'One request per place. If many families are together, send one request for all of them.'
-            : 'A new update replaces the last one. Give what you still need today; anything already on the way is counted for you.'}
+          {isNew ? t.formNewText : t.formUpdateText}
         </p>
       </div>
 
-      {sent && !isNew && <Notice tone="green">Update saved. It goes to the control room as soon as this phone has signal.</Notice>}
+      {sent && !isNew && <Notice tone="green">{t.updateSaved}</Notice>}
 
       <div className="grid-2">
         <div className="field" style={{ gridColumn: '1 / -1' }}>
-          <label htmlFor="place">Name of the place</label>
+          <label htmlFor="place">{t.place}</label>
           <input
             id="place"
             className="input"
@@ -441,62 +441,63 @@ function ReportForm({ camp, onSent }: { camp?: CampState; onSent: (campId: strin
               setName(e.target.value);
               setNamed(false);
             }}
-            placeholder="e.g. Govt. Inter College, Kalsi"
+            placeholder={t.placePh}
             autoComplete="off"
           />
           <span className="help">
-            {named ? 'Filled in from your location. Correct it if it is not quite right.' : 'Press "Use GPS" below and this fills itself in when there is internet.'}
+            {named ? t.placeAuto : t.placeHint}
           </span>
         </div>
         <div className="field">
-          <label htmlFor="reporter">Your name</label>
+          <label htmlFor="reporter">{t.yourName}</label>
           <input id="reporter" className="input" value={reporter} onChange={(e) => setReporter(e.target.value)} autoComplete="name" />
         </div>
         <div className="field">
-          <label htmlFor="phone">Phone number for a call back</label>
-          <input id="phone" className="input" type="tel" inputMode="tel" autoComplete="tel" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="e.g. 98xxx xxxxx" />
+          <label htmlFor="phone">{t.phone}</label>
+          <input id="phone" className="input" type="tel" inputMode="tel" autoComplete="tel" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder={t.phonePh} />
         </div>
       </div>
 
       <fieldset className="stack-sm plain">
-        <legend className="label">Exact location</legend>
-        <LocationPicker value={loc} onChange={setLoc} />
+        <legend className="label">{t.location}</legend>
+        <LocationPicker value={loc} onChange={setLoc} label={t.mapLabel} />
         <div className="row-between">
           <span className="small num" aria-live="polite">
             {loc ? (
               <>
                 {fmtCoord(loc.lat, loc.lng)}
                 <span className="muted">
-                  {loc.acc ? ` within ${Math.round(loc.acc)} m` : ''}, from {loc.src === 'gps' ? 'GPS' : loc.src === 'map' ? 'map pin' : 'typed numbers'}
+                  {loc.acc ? t.within(Math.round(loc.acc)) : ''}
+                  {loc.src === 'gps' ? t.fromGps : loc.src === 'map' ? t.fromMap : t.fromTyped}
                 </span>
               </>
             ) : (
-              <span className="muted">No location yet. Press "Use GPS" or tap the map.</span>
+              <span className="muted">{t.noLoc}</span>
             )}
           </span>
           <div className="row">
-            <button type="button" className="btn btn-sm" onClick={() => setTyping((t) => !t)} aria-expanded={typing}>
-              <Keyboard size={17} aria-hidden /> Type
+            <button type="button" className="btn btn-sm" onClick={() => setTyping((v) => !v)} aria-expanded={typing}>
+              <Keyboard size={17} aria-hidden /> {t.type}
             </button>
             <button type="button" className="btn btn-sm btn-primary" onClick={useGps} disabled={gps === 'busy'}>
-              <Crosshair size={17} aria-hidden /> {gps === 'busy' ? 'Finding you…' : 'Use GPS'}
+              <Crosshair size={17} aria-hidden /> {gps === 'busy' ? t.finding : t.useGps}
             </button>
           </div>
         </div>
-        {gps !== 'idle' && gps !== 'busy' && <p className="error-text">{gps}</p>}
+        {gps !== 'idle' && gps !== 'busy' && <p className="error-text">{gps === 'none' ? t.gpsNone : gps === 'denied' ? t.gpsDenied : t.gpsNoFix}</p>}
         {typing && <CoordInputs loc={loc} onChange={setLoc} />}
-        <p className="help">GPS works without internet. The map picture needs data, but your pin is saved either way.</p>
+        <p className="help">{t.gpsHelp}</p>
       </fieldset>
 
       <fieldset className="stack-sm plain">
-        <legend className="label">People with you</legend>
+        <legend className="label">{t.peopleTitle}</legend>
         <div className="grid-4">
           {(
             [
-              ['people', 'Total', people, setPeople],
-              ['children', 'Children under 5', children, setChildren],
-              ['elderly', 'Elderly', elderly, setElderly],
-              ['injured', 'Injured or sick', injured, setInjured],
+              ['people', t.total, people, setPeople],
+              ['children', t.children, children, setChildren],
+              ['elderly', t.elderly, elderly, setElderly],
+              ['injured', t.injured, injured, setInjured],
             ] as const
           ).map(([id, label, value, set]) => (
             <div className="field" key={id}>
@@ -508,46 +509,55 @@ function ReportForm({ camp, onSent }: { camp?: CampState; onSent: (campId: strin
       </fieldset>
 
       <fieldset className="stack-sm plain">
-        <legend className="label">What you still need</legend>
-        <QtyInputs idPrefix="need" value={needs} onChange={setNeeds} />
+        <legend className="label">{t.needTitle}</legend>
+        <QtyInputs idPrefix="need" value={needs} onChange={setNeeds} names={t.items} units={t.units} />
       </fieldset>
 
       <fieldset className="stack-sm plain">
-        <legend className="label">Anything urgent?</legend>
+        <legend className="label">{t.urgentTitle}</legend>
         <div className="checks">
           <label className="check">
             <input type="checkbox" checked={medical} onChange={(e) => setMedical(e.target.checked)} />
-            <span>Medical emergency<span className="help">Someone needs a doctor or to be taken to hospital.</span></span>
+            <span>
+              {t.medical[0]}
+              <span className="help">{t.medical[1]}</span>
+            </span>
           </label>
           <label className="check">
             <input type="checkbox" checked={trapped} onChange={(e) => setTrapped(e.target.checked)} />
-            <span>People trapped<span className="help">Cut off by water or debris and cannot get out.</span></span>
+            <span>
+              {t.trapped[0]}
+              <span className="help">{t.trapped[1]}</span>
+            </span>
           </label>
           <label className="check">
             <input type="checkbox" checked={roadBlocked} onChange={(e) => setRoadBlocked(e.target.checked)} />
-            <span>Road to us is blocked<span className="help">Supplies will be carried in on foot.</span></span>
+            <span>
+              {t.road[0]}
+              <span className="help">{t.road[1]}</span>
+            </span>
           </label>
         </div>
       </fieldset>
 
       <div className="field">
-        <label htmlFor="note">Anything else (optional)</label>
-        <textarea id="note" className="textarea" value={note} onChange={(e) => setNote(e.target.value)} maxLength={280} placeholder="e.g. Landmark: next to the temple, approach from the river side" />
-        <span className="help">Sent over the internet only. It does not fit in the SMS.</span>
+        <label htmlFor="note">{t.note}</label>
+        <textarea id="note" className="textarea" value={note} onChange={(e) => setNote(e.target.value)} maxLength={280} placeholder={t.notePh} />
+        <span className="help">{t.noteHelp}</span>
       </div>
 
       {errors.length > 0 && (
         <div id="report-errors" tabIndex={-1}>
           <Notice tone="red">
             {errors.map((e) => (
-              <p key={e}>{e}</p>
+              <p key={e}>{t[e]}</p>
             ))}
           </Notice>
         </div>
       )}
 
       <button type="submit" className="btn btn-primary btn-lg btn-block">
-        <PaperPlaneTilt size={20} aria-hidden /> {isNew ? 'Send request' : 'Send update'}
+        <PaperPlaneTilt size={20} aria-hidden /> {isNew ? t.sendRequest : t.sendUpdate}
       </button>
     </form>
   );
@@ -559,20 +569,21 @@ function CoordInputs({ loc, onChange }: { loc: Picked | null; onChange: (p: Pick
   const la = Number(lat);
   const ln = Number(lng);
   const ok = lat !== '' && lng !== '' && Number.isFinite(la) && Number.isFinite(ln) && Math.abs(la) <= 90 && Math.abs(ln) <= 180;
+  const t = useT();
   return (
     <div className="subtle stack-sm">
       <div className="grid-2">
         <div className="field">
-          <label htmlFor="lat">Latitude</label>
+          <label htmlFor="lat">{t.lat}</label>
           <input id="lat" className="input" inputMode="decimal" value={lat} onChange={(e) => setLat(e.target.value)} placeholder="30.32710" />
         </div>
         <div className="field">
-          <label htmlFor="lng">Longitude</label>
+          <label htmlFor="lng">{t.lng}</label>
           <input id="lng" className="input" inputMode="decimal" value={lng} onChange={(e) => setLng(e.target.value)} placeholder="78.13740" />
         </div>
       </div>
       <button type="button" className="btn btn-sm" disabled={!ok} onClick={() => onChange({ lat: la, lng: ln, src: 'manual' })}>
-        Place pin here
+        {t.placePin}
       </button>
     </div>
   );
@@ -581,6 +592,7 @@ function CoordInputs({ loc, onChange }: { loc: Picked | null; onChange: (p: Pick
 function Checkin({ camp }: { camp: CampState }) {
   const [people, setPeople] = useState(camp.people);
   const [done, setDone] = useState(false);
+  const t = useT();
   const send = () => {
     const ev: CampCheckin = { type: 'camp.checkin', id: newId(), at: Date.now(), by: 'camp', campId: camp.id, people };
     record(SCOPE, ev);
@@ -589,21 +601,21 @@ function Checkin({ camp }: { camp: CampState }) {
   return (
     <section className="card card-pad stack-sm" aria-labelledby="checkin-title">
       <h2 className="card-title" id="checkin-title">
-        <Heartbeat size={20} aria-hidden /> All OK check-in
+        <Heartbeat size={20} aria-hidden /> {t.checkinTitle}
       </h2>
       <p className="muted small">
-        Send this every few hours, even when you need nothing new. If a camp goes quiet, the control room sends a team to check.
+        {t.checkinText}
       </p>
       <div className="row" style={{ alignItems: 'flex-end' }}>
         <div className="field" style={{ width: 140 }}>
-          <label htmlFor="ck-people">People now</label>
+          <label htmlFor="ck-people">{t.peopleNow}</label>
           <NumberInput id="ck-people" value={people} onChange={setPeople} max={100_000} />
         </div>
         <button type="button" className="btn" onClick={send}>
-          Send check-in
+          {t.sendCheckin}
         </button>
       </div>
-      {done && <p className="small" style={{ color: 'var(--green)' }}>Check-in saved. Your last request still stands.</p>}
+      {done && <p className="small" style={{ color: 'var(--green)' }}>{t.checkinDone}</p>}
     </section>
   );
 }

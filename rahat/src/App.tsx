@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { MouseEvent } from 'react';
 import type { Icon } from '@phosphor-icons/react';
-import { ArrowLeft, ArrowsClockwise, Broadcast, CloudCheck, CloudSlash, PersonSimpleHike, SignOut, Truck, UsersThree, Warehouse, WifiMedium } from '@phosphor-icons/react';
+import { ArrowLeft, Translate, ArrowsClockwise, Broadcast, CloudCheck, CloudSlash, PersonSimpleHike, SignOut, Truck, UsersThree, Warehouse, WifiMedium } from '@phosphor-icons/react';
 import type { StaffRole } from './lib/types.ts';
 import { TEAMS, TRUCKS } from './lib/config.ts';
 import { HOME, loadSession, signOut, useAuth } from './lib/auth.ts';
@@ -10,6 +10,7 @@ import { useNetwork } from './lib/net.ts';
 import { ago } from './lib/format.ts';
 import { useNow } from './components/ui.tsx';
 import { navigate, usePath } from './lib/router.ts';
+import { setLang, useT } from './lib/i18n.ts';
 import { Brand } from './components/Brand.tsx';
 import { Landing } from './screens/Landing.tsx';
 import { RequestScreen } from './screens/Request.tsx';
@@ -65,6 +66,7 @@ function parse(path: string): Route {
 
 function PublicHeader({ onRequestPage }: { onRequestPage: boolean }) {
   const hasRequest = myCampIds().length > 0;
+  const t = useT();
   // Transparent at the top of the page, solid once the top marker scrolls out of view.
   const [scrolled, setScrolled] = useState(false);
   useEffect(() => {
@@ -84,11 +86,20 @@ function PublicHeader({ onRequestPage }: { onRequestPage: boolean }) {
       <div className="wrap topbar-in">
         <Brand />
         <nav className="links" aria-label="On this page">
-          <a href="#how" onClick={jump('how')}>How it works</a>
+          <a href="#how" onClick={jump('how')}>{t.howItWorks}</a>
         </nav>
+        <button
+          type="button"
+          className="btn btn-sm lang-switch"
+          onClick={() => setLang(t.lang === 'en' ? 'hi' : 'en')}
+          aria-label={t.switchLabel}
+          lang={t.lang === 'en' ? 'hi' : 'en'}
+        >
+          <Translate size={17} aria-hidden /> {t.switchTo}
+        </button>
         {!onRequestPage && (
           <a className="btn btn-primary" href="/request">
-            {hasRequest ? 'My request' : 'Request help'}
+            {hasRequest ? t.myRequest : t.requestHelp}
           </a>
         )}
       </div>
@@ -231,10 +242,16 @@ export function App() {
     };
   }, []);
 
+  const t = useT();
   useEffect(() => {
     if (!window.location.hash) window.scrollTo(0, 0);
-    document.title = key === 'request' ? 'Request help | Rahat' : key.startsWith('staff') ? 'Staff | Rahat' : 'Rahat: relief for flood and landslide camps';
   }, [key]);
+  useEffect(() => {
+    // Public pages follow the chosen language; staff screens are English.
+    const staff = key.startsWith('staff');
+    document.documentElement.lang = staff ? 'en' : t.lang;
+    document.title = staff ? 'Staff | Rahat' : key === 'request' ? t.titleRequest : t.titleHome;
+  }, [key, t.lang, t.titleRequest, t.titleHome]);
 
   return (
     <>

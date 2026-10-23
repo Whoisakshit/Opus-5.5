@@ -1,0 +1,43 @@
+# Rahat with Postgres.
+#   Database only (run the app with npm):  docker compose up -d db
+#   Database + app together:               docker compose --profile app up -d --build
+# Secrets come from .env (see .env.example). Never commit .env.
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: rahat
+      POSTGRES_USER: rahat
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    # Bound to this machine only, on 5433 so it never clashes with a local Postgres on 5432.
+    ports:
+      - "127.0.0.1:5433:5432"
+    volumes:
+      - rahat-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rahat -d rahat"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  app:
+    profiles: ["app"]
+    build:
+      context: .
+      args:
+        VITE_CONTROL_ROOM_SMS: ${VITE_CONTROL_ROOM_SMS:-}
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://rahat:${POSTGRES_PASSWORD}@db:5432/rahat
+      SESSION_SECRET: ${SESSION_SECRET:?Set SESSION_SECRET in .env}
+      SMS_GATEWAY_TOKEN: ${SMS_GATEWAY_TOKEN:-}
+      PORT: "4124"
+    ports:
+      - "4124:4124"
+
+volumes:
+  rahat-db:

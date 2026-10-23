@@ -29,6 +29,20 @@ There is no sign-up page. Accounts are handed out, so nobody can make themselves
 
 For local development only, `server/data/dev-credentials.txt` can hold your own test login; the whole `server/data/` folder is in `.gitignore` and must never be committed.
 
+## Database (Postgres in Docker)
+
+Yes, a real deployment needs a database: the JSON files in `server/data` are only for quick development (no transactions, no safe concurrent writes, no proper backups). With `DATABASE_URL` set, the server stores everything in Postgres: the event log (`events`, append-only, one row per event), staff accounts (`users`), camp keys (`camp_keys`) and `meta`. Every write is stored before the server answers.
+
+```bash
+cp .env.example .env            # then put long random values in it
+npm run db:up                   # Postgres 16 in Docker, on 127.0.0.1:5433
+echo "DATABASE_URL=postgres://rahat:<POSTGRES_PASSWORD>@127.0.0.1:5433/rahat" > .env.local
+npm run db:import               # one-time: copy existing server/data JSON into Postgres
+npm run server:db               # the server, now on Postgres
+```
+
+Everything in Docker (database and app): `docker compose --profile app up -d --build`, then open `http://localhost:4124`. Port 5433 is used so it never clashes with a Postgres you may already run on 5432. Back up with `docker compose exec db pg_dump -U rahat rahat > backup.sql`.
+
 ## Run it locally
 
 ```bash
@@ -42,7 +56,7 @@ npm test              # unit tests
 Open `http://localhost:4123` for the public site and `http://localhost:4123/admin` to sign in as the control room. Use `npm run server` (no sample data) for a real deployment.
 
 ### Network detection (no manual switch)
-The app decides "online / weak / offline" by itself from three signals: the browser's `navigator.onLine`, the Network Information API (2g, slow-2g, high round-trip time on Android Chrome), and its own sync attempts (failures and slow round trips, which catch "connected but no data"). Offline, everything is saved on the phone and the request page offers SMS and QR. To test it, use your browser's DevTools network throttling or "Offline".
+The app decides "online / weak / offline" by itself from three signals: the browser's `navigator.onLine`, the Network Information API (2g, slow-2g, high round-trip time on Android Chrome), and its own sync attempts (failures and slow round trips, which catch "connected but no data"). Offline, everything is saved on the phone and the request page offers SMS. To test it, use your browser's DevTools network throttling or "Offline".
 
 ### Addresses
 
@@ -63,8 +77,7 @@ Drivers and rescue teams share their GPS position while their screen is open: ab
 ### With no internet at all
 - **The website itself opens offline** once it has been opened one time with signal. The service worker keeps a copy on the phone (production build only; `npm run dev` turns it off so code edits show up). On Android, "Add to Home screen" makes it look like an app.
 - **A phone that never opened the site** can still text the control room number in plain words ("40 people near Kalsi school need food"). The SMS gateway forwards it, and it appears in the control room's Alerts as "Text message from ..." for the officer to call back and mark handled.
-- **Phone to phone with no network:** "Share nearby" on an unsent request uses the phone's own share sheet. On Android, Quick Share sends the request code over Bluetooth or Wi-Fi Direct to a rescue team's phone, which pastes it into "Carry a message". A QR code does the same by camera.
-- **Why not direct Bluetooth inside the web page:** browsers can connect to Bluetooth devices (Web Bluetooth) but cannot make one phone discoverable to another, so a website cannot pair two phones by itself. True phone-to-phone mesh needs a native Android app (Nearby Connections API), which is a possible next step.
+- **Phone to phone with no network** (for example over Bluetooth) needs a native Android app; a website cannot pair two phones. Until then, messages and requests wait on the phone and send themselves when any signal returns; with phone signal but no data, a request can go as one SMS.
 - **An MCP server does not help here.** MCP connects AI assistants to tools; it needs a network and does nothing for a phone with no signal. SMS is the channel that works on the most basic phones and networks.
 
 ### Place name from GPS
@@ -72,7 +85,7 @@ After "Use GPS" (or dropping a pin) the request form fills the place name using 
 
 ## Deploying for real
 
-1. **HTTPS is required** (GPS, the camera for QR scanning and secure cookies all need it). Put the server behind a reverse proxy (Caddy or nginx with Let's Encrypt, both free) that sets `X-Forwarded-Proto`.
+1. **HTTPS is required** (GPS and secure cookies both need it). Put the server behind a reverse proxy (Caddy or nginx with Let's Encrypt, both free) that sets `X-Forwarded-Proto`.
 2. Build with your numbers, then start:
    ```bash
    VITE_CONTROL_ROOM_SMS="+91XXXXXXXXXX" VITE_STATE_EOC=1070 VITE_DISTRICT_EOC=1077 npm run build
@@ -94,7 +107,7 @@ After "Use GPS" (or dropping a pin) the request form fills the place name using 
 | Requirement | How |
 |---|---|
 | 1. Camps report needs and **exact location** | Map pin (tap or drag), **GPS button** (GPS works with no internet), or typed coordinates. Accuracy circle shown. Stored with its source (GPS / map / typed). |
-| 2. Works with no internet or no network | Phone saves first (outbox), syncs later. Same report as a **160-char SMS code** with checksum. With no network at all, a **QR code** that any driver or rescue team's phone carries out (store-and-forward). |
+| 2. Works with no internet or no network | Phone saves first (outbox), syncs later. Same report as a **160-char SMS code** with checksum, and plain-language SMS reach the control room as alerts. The site itself opens offline after one visit. |
 | 3. Fair priority when stock is short | Transparent 0-100 score, then **weighted max-min fair split** of the free stock. Officer edits and approves; edits require a written reason. |
 | 4. Track warehouse to camp | Five custody steps: approved, packed, loaded (truck or team), delivered (with camp's 4-digit code), confirmed (camp's own count). |
 | 5. Missing items, shortages, silent camps | Each count is compared with the previous one, so a loss is pinned to a handover. Stock vs need per item. Camps unheard for 6 h (quiet) and 12 h (silent). Duplicate camps within 300 m. Delivery without code. Unconfirmed delivery after 3 h. |
@@ -105,7 +118,7 @@ After "Use GPS" (or dropping a pin) the request form fills the place name using 
 
 **Event log instead of editable records.** Every action is an immutable event with an id created on the phone. State is computed by replaying events (`src/lib/reduce.ts`). This one choice is what makes the rest work:
 - Offline is natural: append locally, upload later.
-- **Deduplication across channels**: the SMS code and QR carry the same id, so a report arriving by SMS and later by internet is counted once (tested).
+- **Deduplication across channels**: the SMS code carries the same id, so a report arriving by SMS and later by internet is counted once (tested).
 - Full audit trail for free: who approved what, when, and why.
 - Alternative considered: a normal database with update-in-place rows. Simpler queries, but conflicting offline edits need merge logic and you lose the history.
 
@@ -163,8 +176,8 @@ Baseline to compare against: today's process (WhatsApp groups, phone calls, pape
 
 ## Files
 
-- `src/lib/` domain logic, no UI: `types` (events), `reduce` (state), `allocation` (fairness), `alerts`, `codec` (SMS/QR), `store` (offline outbox + sync), `seed` (development sample data)
-- `src/screens/` one file per role; `src/components/` map, QR/code reader, field actions
+- `src/lib/` domain logic, no UI: `types` (events), `reduce` (state), `allocation` (fairness), `alerts`, `codec` (SMS), `store` (offline outbox + sync), `seed` (development sample data)
+- `src/screens/` one file per role; `src/components/` map, dashboards, field actions; `server/storage.ts` Postgres or JSON storage
 - `server/server.ts` sync server + SMS webhook; `tests/` unit tests
 
 Development sample data (`SEED_DEV_DATA=1`): the camps, people, trucks and teams are fictional; the localities are real places in Dehradun district.

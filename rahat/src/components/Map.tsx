@@ -65,6 +65,7 @@ export function OpsMap({
     ro.observe(el.current!);
     return () => {
       ro.disconnect();
+      m.stop(); // end any pan or zoom still running, or Leaflet throws on removal
       m.remove();
       map.current = null;
       fitted.current = false;
@@ -181,7 +182,7 @@ export function MapLegend() {
 export type Picked = { lat: number; lng: number; acc?: number; src: 'gps' | 'map' | 'manual' };
 
 /** Tap the map or drag the pin. GPS and typed coordinates flow in through `value`. */
-export function LocationPicker({ value, onChange }: { value: Picked | null; onChange: (p: Picked) => void }) {
+export function LocationPicker({ value, onChange, label = 'Map. Tap to place your camp, or drag the pin.' }: { value: Picked | null; onChange: (p: Picked) => void; label?: string }) {
   const el = useRef<HTMLDivElement>(null);
   const map = useRef<L.Map | null>(null);
   const marker = useRef<L.Marker | null>(null);
@@ -198,6 +199,7 @@ export function LocationPicker({ value, onChange }: { value: Picked | null; onCh
     ro.observe(el.current!);
     return () => {
       ro.disconnect();
+      m.stop(); // end any pan or zoom still running, or Leaflet throws on removal
       m.remove();
       map.current = null;
       marker.current = null;
@@ -223,8 +225,9 @@ export function LocationPicker({ value, onChange }: { value: Picked | null; onCh
       ? L.circle(at, { radius: value.acc, color: '#4d93ff', weight: 1, fillOpacity: 0.08, interactive: false }).addTo(m)
       : null;
 
-    if (value.src !== 'map') m.setView(at, Math.max(m.getZoom(), 15));
+    // No animation: the form can unmount this map right after (e.g. once a request is sent).
+    if (value.src !== 'map') m.setView(at, Math.max(m.getZoom(), 15), { animate: false });
   }, [value]);
 
-  return <div ref={el} className="map map-pick" role="application" aria-label="Map. Tap to place your camp, or drag the pin." />;
+  return <div ref={el} className="map map-pick" role="application" aria-label={label} />;
 }

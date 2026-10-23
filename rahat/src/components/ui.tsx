@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import { CheckCircle, Info, WarningCircle, Warning } from '@phosphor-icons/react';
-import type { Qty } from '../lib/types.ts';
+import type { Item, Qty } from '../lib/types.ts';
 import { ITEMS, ITEM_META } from '../lib/types.ts';
 
 export function useNow(ms = 15_000) {
@@ -38,7 +38,9 @@ export function Empty({ title, children }: { title: string; children?: ReactNode
   );
 }
 
-export function QtyView({ q, compare }: { q: Qty; compare?: Qty }) {
+type Names = { names?: Record<Item, string> };
+
+export function QtyView({ q, compare, names }: { q: Qty; compare?: Qty } & Names) {
   return (
     <div className="qty">
       {ITEMS.map((k) => {
@@ -46,7 +48,7 @@ export function QtyView({ q, compare }: { q: Qty; compare?: Qty }) {
         return (
           <div className="qty-cell" key={k} style={short ? { background: 'var(--red-soft)' } : undefined}>
             <b style={short ? { color: 'var(--red)' } : undefined}>{q[k].toLocaleString('en-IN')}</b>
-            <span>{ITEM_META[k].label}</span>
+            <span>{names?.[k] ?? ITEM_META[k].label}</span>
           </div>
         );
       })}
@@ -90,18 +92,21 @@ export function QtyInputs({
   value,
   onChange,
   of,
+  names,
+  units,
 }: {
   idPrefix: string;
   value: Qty;
   onChange: (q: Qty) => void;
   of?: Qty; // shows "of N" under each field
-}) {
+  units?: Record<Item, string>;
+} & Names) {
   return (
     <div className="grid-4">
       {ITEMS.map((k) => (
         <div className="field" key={k}>
           <label htmlFor={`${idPrefix}-${k}`}>
-            {ITEM_META[k].label} <span className="muted">({ITEM_META[k].unit})</span>
+            {names?.[k] ?? ITEM_META[k].label} <span className="muted">({units?.[k] ?? ITEM_META[k].unit})</span>
           </label>
           <NumberInput id={`${idPrefix}-${k}`} value={value[k]} onChange={(n) => onChange({ ...value, [k]: n })} />
           {of && <span className="help num">of {of[k].toLocaleString('en-IN')}</span>}

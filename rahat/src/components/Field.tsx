@@ -2,13 +2,12 @@ import { useEffect, useRef, useState } from 'react';
 import { CheckCircle, MapPinLine, NavigationArrow } from '@phosphor-icons/react';
 import type { DispatchDeliver, DispatchLoad, Qty, Role, UnitLocation } from '../lib/types.ts';
 import { ITEMS, newId } from '../lib/types.ts';
-import type { CampState, DispatchState, State } from '../lib/reduce.ts';
+import type { CampState, DispatchState } from '../lib/reduce.ts';
 import { currentLoad } from '../lib/reduce.ts';
 import { record } from '../lib/store.ts';
 import { codeHash } from '../lib/hash.ts';
 import { WAREHOUSE } from '../lib/config.ts';
 import { ago, distanceM, km } from '../lib/format.ts';
-import { CodeReader } from './Codes.tsx';
 import { QtyInputs, useNow } from './ui.tsx';
 
 /**
@@ -94,19 +93,6 @@ export function Directions({ camp }: { camp: CampState }) {
   );
 }
 
-/** Drivers and teams pass through cut-off areas. Their phones carry camp messages out. */
-export function RelayCard({ role, state }: { role: Role; state: State }) {
-  const ids = new Set(state.events.map((e) => e.id));
-  return (
-    <section className="card card-pad stack-sm" aria-labelledby={`relay-${role}`}>
-      <h2 className="card-title" id={`relay-${role}`}>Carry a message from a camp</h2>
-      <p className="small muted">
-        Passing a camp with no signal? Scan or type its code. Your phone sends it when you are back in range.
-      </p>
-      <CodeReader via="relay" cta="Carry this message" isKnown={(id) => ids.has(id)} onAccept={(ev) => record('staff', ev)} />
-    </section>
-  );
-}
 
 /**
  * Live location for a truck or rescue team. While this screen is open the phone

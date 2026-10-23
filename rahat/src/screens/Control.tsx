@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ChatText, CheckCircle, MapTrifold, Scales, SealCheck, Warning, WarningCircle, X } from '@phosphor-icons/react';
+import { CheckCircle, MapTrifold, Scales, SealCheck, Warning, WarningCircle, X } from '@phosphor-icons/react';
 import { codeHash, newCode } from '../lib/hash.ts';
 import type { DispatchApprove, Qty, TaskKind, TeamTask } from '../lib/types.ts';
 import { ITEMS, ITEM_META, newId, zeroQty } from '../lib/types.ts';
@@ -13,7 +13,6 @@ import { QUIET_AFTER_H, SILENT_AFTER_H, TRUCKS, carrierLabel } from '../lib/conf
 import { record, useStore } from '../lib/store.ts';
 import { ago, distanceM, fmtCoord, hoursSince, km, VIA_LABEL } from '../lib/format.ts';
 import { MapLegend, OpsMap } from '../components/Map.tsx';
-import { CodeReader } from '../components/Codes.tsx';
 import { Badge, Empty, Notice, QtyInputs, QtyView, qtyLine, useNow } from '../components/ui.tsx';
 
 type Tab = 'needs' | 'allocate' | 'tracking' | 'alerts' | 'teams';
@@ -23,7 +22,6 @@ export function ControlScreen() {
   const now = useNow();
   const [tab, setTab] = useState<Tab>('needs');
   const [selected, setSelected] = useState<string | undefined>();
-  const [smsOpen, setSmsOpen] = useState(false);
   const alerts = useMemo(() => buildAlerts(state, now), [state, now]);
   const red = alerts.filter((a) => a.level === 'red').length;
 
@@ -68,9 +66,6 @@ export function ControlScreen() {
             <a className="btn btn-sm btn-quiet" href="/warehouse">Warehouse screen</a>
             <a className="btn btn-sm btn-quiet" href="/driver">Truck screens</a>
             <a className="btn btn-sm btn-quiet" href="/rescue">Rescue team screens</a>
-            <button type="button" className="btn" onClick={() => setSmsOpen(true)}>
-              <ChatText size={18} aria-hidden /> Add SMS report
-            </button>
           </div>
         </div>
 
@@ -114,7 +109,6 @@ export function ControlScreen() {
         </section>
       </div>
       {selectedCamp && <CampDrawer c={selectedCamp} state={state} now={now} onClose={() => setSelected(undefined)} />}
-      {smsOpen && <SmsDialog state={state} onClose={() => setSmsOpen(false)} />}
     </div>
   );
 }
@@ -760,38 +754,6 @@ function AssignTeam({
         Assign team
       </button>
       {sent && <p className="small" style={{ color: 'var(--green)' }}>{sent}</p>}
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------- SMS inbox
-
-function SmsDialog({ state, onClose }: { state: State; onClose: () => void }) {
-  const box = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    box.current?.querySelector('textarea')?.focus();
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
-  const ids = useMemo(() => new Set(state.events.map((e) => e.id)), [state]);
-  return (
-    <div className="overlay" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div ref={box} className="card card-pad dialog stack" role="dialog" aria-modal="true" aria-labelledby="sms-title">
-        <div className="row-between">
-          <h2 className="card-title" id="sms-title">
-            <ChatText size={20} aria-hidden /> Add an SMS report
-          </h2>
-          <button type="button" className="btn btn-sm btn-quiet" onClick={onClose} aria-label="Close">
-            <X size={18} aria-hidden />
-          </button>
-        </div>
-        <p className="small muted">
-          Paste a text that reached the control room phone. In the field, a free SMS gateway app on an Android phone forwards these to the
-          server automatically, so this is the manual backup.
-        </p>
-        <CodeReader via="sms" cta="Add to the system" isKnown={(id) => ids.has(id)} onAccept={(ev) => record('staff', ev)} />
-      </div>
     </div>
   );
 }

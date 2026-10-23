@@ -4,7 +4,8 @@
 import { createInterface } from 'node:readline';
 import { randomBytes, randomUUID } from 'node:crypto';
 import type { User } from './auth.ts';
-import { hashPassword, loadUsers, passwordProblem, saveUsers } from './auth.ts';
+import { hashPassword, passwordProblem } from './auth.ts';
+import { openStorage } from './storage.ts';
 
 const [username = '', ...nameParts] = process.argv.slice(2);
 const name = nameParts.join(' ').trim();
@@ -45,8 +46,10 @@ if (problem) {
   process.exit(1);
 }
 
-const users = loadUsers();
+const store = openStorage();
+const users = await store.loadUsers();
 if (users.some((u) => u.username === username)) {
+  await store.close();
   console.error(`"${username}" already exists.`);
   process.exit(1);
 }
@@ -60,7 +63,8 @@ const admin: User = {
   v: 1,
   createdAt: Date.now(),
 };
-saveUsers([...users, admin]);
+await store.saveUser(admin);
+await store.close();
 console.log(`Created control room admin "${username}".`);
 if (generated) {
   console.log(`Password: ${password}`);

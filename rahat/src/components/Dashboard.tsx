@@ -100,6 +100,7 @@ export function FocusMap({ points, me }: { points: MapPoint[]; me?: { lat: numbe
     ro.observe(el.current!);
     return () => {
       ro.disconnect();
+      m.stop();
       m.remove();
     };
   }, []);
@@ -126,8 +127,8 @@ export function FocusMap({ points, me }: { points: MapPoint[]; me?: { lat: numbe
         .addTo(g);
       all.push([me.lat, me.lng]);
     }
-    if (all.length === 1) m.setView(all[0], 13);
-    else if (all.length > 1) m.fitBounds(L.latLngBounds(all), { padding: [36, 36], maxZoom: 14 });
+    if (all.length === 1) m.setView(all[0], 13, { animate: false });
+    else if (all.length > 1) m.fitBounds(L.latLngBounds(all), { padding: [36, 36], maxZoom: 14, animate: false });
     // key captures the points; Leaflet objects are rebuilt only when they change
   }, [key]);
 

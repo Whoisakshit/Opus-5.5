@@ -14,7 +14,7 @@
 import { createServer } from 'node:http';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
-import { createReadStream, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { createReadStream, existsSync, statSync } from 'node:fs';
 import { dirname, extname, join, normalize, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Ev, StaffRole } from '../src/lib/types.ts';
@@ -22,49 +22,33 @@ import { decode } from '../src/lib/codec.ts';
 import { TEAMS, TRUCKS } from '../src/lib/config.ts';
 import { invalid } from './validate.ts';
 import type { User } from './auth.ts';
+import { openStorage } from './storage.ts';
 import {
-  DATA_DIR,
   SESSION_HOURS,
   STAFF_ROLES,
   checkPassword,
   hashPassword,
   issueToken,
-  loadUsers,
   passwordProblem,
   publicUser,
-  saveUsers,
   tooManyAttempts,
   userFromToken,
 } from './auth.ts';
 
 const PORT = Number(process.env.PORT ?? 4124);
 const DIST = join(dirname(fileURLToPath(import.meta.url)), '..', 'dist');
-const EVENTS_FILE = join(DATA_DIR, 'events.json');
-const CAMPS_FILE = join(DATA_DIR, 'camps.json');
 const MAX_BODY = 1_000_000;
 const COOKIE = 'rahat_session';
 
-// ---------------------------------------------------------------- storage
-
-type Box = { epoch: string; events: Ev[] };
-
-function readJson<T>(file: string, fallback: T): T {
-  try {
-    return JSON.parse(readFileSync(file, 'utf8'));
-  } catch {
-    return fallback;
-  }
-}
-function writeJson(file: string, data: unknown) {
-  mkdirSync(DATA_DIR, { recursive: true });
-  writeFileSync(file, JSON.stringify(data), { mode: 0o600 });
-}
-
-const box: Box = readJson(EVENTS_FILE, { epoch: randomUUID(), events: [] });
+const store = openStorage();
+const snap = await store.load();
+const box = { epoch: snap.epoch, events: snap.events };
 if (!box.events.length && process.env.SEED_DEV_DATA === '1') {
   const { seedEvents } = await import('../src/lib/seed.ts');
-  box.events = await seedEvents();
-  console.log(`Seeded ${box.events.length} development events.`);
+  const seeded = await seedEvents();
+  await store.appendEvents(seeded);
+  box.events = seeded;
+  console.log(`Seeded ${seeded.length} development events.`);
 }
 const ids = new Set(box.events.map((e) => e.id));
 const dispatchCamp = new Map<string, string>(); // dispatchId -> campId
@@ -78,40 +62,39 @@ function index(e: Ev) {
   if (e.type === 'team.task') taskCamp.set(e.taskId, e.campId);
 }
 box.events.forEach(index);
-writeJson(EVENTS_FILE, box);
 
 /** campId -> sha256 of the key held by the camp's phone */
-const campKeys: Record<string, string> = readJson(CAMPS_FILE, {});
+const campKeys: Record<string, string> = snap.campKeys;
 const sha = (s: string) => createHash('sha256').update(s).digest('hex');
 
-function ingest(events: Ev[]): string[] {
-  const added: string[] = [];
+/** Store first, then publish. Ids are reserved up front so two copies arriving together are kept once. */
+async function ingest(events: Ev[]): Promise<string[]> {
+  const fresh: Ev[] = [];
   for (const e of events) {
     if (ids.has(e.id)) continue;
-    box.events.push(e);
     ids.add(e.id);
-    index(e);
-    added.push(e.id);
+    fresh.push(e);
   }
-  if (added.length) writeJson(EVENTS_FILE, box);
-  return added;
+  try {
+    await store.appendEvents(fresh);
+  } catch (err) {
+    fresh.forEach((e) => ids.delete(e.id));
+    throw err;
+  }
+  for (const e of fresh) {
+    box.events.push(e);
+    index(e);
+  }
+  return fresh.map((e) => e.id);
 }
 
-let users = loadUsers();
-let usersSeen = mtime(join(DATA_DIR, 'users.json'));
-function mtime(f: string) {
-  try {
-    return statSync(f).mtimeMs;
-  } catch {
-    return 0;
-  }
-}
-/** Pick up accounts made by `npm run create-admin` without a restart. */
-function freshUsers(): User[] {
-  const m = mtime(join(DATA_DIR, 'users.json'));
-  if (m !== usersSeen) {
-    users = loadUsers();
-    usersSeen = m;
+let users = snap.users;
+let usersAt = Date.now();
+/** Accounts made by `npm run create-admin` (a separate process) show up within a few seconds. */
+async function currentUsers(force = false): Promise<User[]> {
+  if (force || Date.now() - usersAt > 5_000) {
+    users = await store.loadUsers();
+    usersAt = Date.now();
   }
   return users;
 }
@@ -171,8 +154,8 @@ const secure = (req: IncomingMessage) => req.headers['x-forwarded-proto'] === 'h
 const sessionCookie = (req: IncomingMessage, value: string, maxAge: number) =>
   `${COOKIE}=${value}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${maxAge}${secure(req) ? '; Secure' : ''}`;
 
-function staff(req: IncomingMessage, roles?: StaffRole[]): User {
-  const u = userFromToken(cookie(req, COOKIE), freshUsers());
+async function staff(req: IncomingMessage, roles?: StaffRole[]): Promise<User> {
+  const u = userFromToken(cookie(req, COOKIE), await currentUsers());
   if (!u) throw new HttpError(401, 'Sign in required');
   if (roles && !roles.includes(u.role)) throw new HttpError(403, 'Not allowed for your role');
   return u;
@@ -300,12 +283,12 @@ async function api(req: IncomingMessage, res: ServerResponse, url: URL) {
         const e = raw as Ev;
         if (e.type === 'camp.report' && !campKeys[e.campId]) {
           campKeys[e.campId] = sha(keys[e.campId]);
-          writeJson(CAMPS_FILE, campKeys);
+          await store.setCampKey(e.campId, campKeys[e.campId]);
         }
         ok.push(e);
       }
     }
-    ingest(ok);
+    await ingest(ok);
     return send(res, 200, { accepted: ok.map((e) => e.id), rejected });
   }
 
@@ -320,22 +303,23 @@ async function api(req: IncomingMessage, res: ServerResponse, url: URL) {
   if (path === '/api/auth/login' && method === 'POST') {
     if (tooManyAttempts(ip(req))) throw new HttpError(429, 'Too many attempts. Wait 15 minutes.');
     const { username, password } = await json(req);
-    const u = freshUsers().find((x) => x.username === String(username ?? '').trim().toLowerCase());
+    const name = String(username ?? '').trim().toLowerCase();
+    const u = (await currentUsers()).find((x) => x.username === name) ?? (await currentUsers(true)).find((x) => x.username === name);
     if (!u || !u.active || typeof password !== 'string' || !checkPassword(u, password))
       throw new HttpError(401, 'Wrong username or password.');
     return send(res, 200, { user: publicUser(u) }, { 'set-cookie': sessionCookie(req, issueToken(u), SESSION_HOURS * 3600) });
   }
   if (path === '/api/auth/logout' && method === 'POST') return send(res, 200, { ok: true }, { 'set-cookie': sessionCookie(req, '', 0) });
-  if (path === '/api/auth/me') return send(res, 200, { user: publicUser(staff(req)) });
+  if (path === '/api/auth/me') return send(res, 200, { user: publicUser(await staff(req)) });
 
   // ---- staff data
   if (path === '/api/events' && method === 'GET') {
-    const u = staff(req);
+    const u = await staff(req);
     const since = Math.max(0, Number(url.searchParams.get('since') ?? 0) || 0);
     return send(res, 200, { events: box.events.slice(since).map((e) => forRole(e, u.role)), cursor: box.events.length, epoch: box.epoch });
   }
   if (path === '/api/events' && method === 'POST') {
-    const u = staff(req);
+    const u = await staff(req);
     const body = await json(req);
     const events = Array.isArray(body.events) ? body.events.slice(0, 500) : [];
     const ok: Ev[] = [];
@@ -345,17 +329,17 @@ async function api(req: IncomingMessage, res: ServerResponse, url: URL) {
       if (bad) rejected.push({ id: (raw as Ev)?.id, error: bad });
       else ok.push(raw as Ev);
     }
-    ingest(ok);
+    await ingest(ok);
     return send(res, 200, { accepted: ok.map((e) => e.id), rejected });
   }
 
   // ---- staff accounts (control room admins)
   if (path === '/api/staff' && method === 'GET') {
-    staff(req, ['control']);
+    await staff(req, ['control']);
     return send(res, 200, { users: users.map(publicUser) });
   }
   if (path === '/api/staff' && method === 'POST') {
-    staff(req, ['control']);
+    await staff(req, ['control']);
     const b = await json(req);
     const username = String(b.username ?? '').trim().toLowerCase();
     const name = String(b.name ?? '').trim();
@@ -380,14 +364,13 @@ async function api(req: IncomingMessage, res: ServerResponse, url: URL) {
       v: 1,
       createdAt: Date.now(),
     };
+    await store.saveUser(u);
     users = [...users, u];
-    saveUsers(users);
-    usersSeen = mtime(join(DATA_DIR, 'users.json'));
     return send(res, 201, { user: publicUser(u) });
   }
   const m = path.match(/^\/api\/staff\/([0-9a-f-]{36})$/);
   if (m && method === 'POST') {
-    const me = staff(req, ['control']);
+    const me = await staff(req, ['control']);
     const b = await json(req);
     const u = users.find((x) => x.id === m[1]);
     if (!u) throw new HttpError(404, 'No such account.');
@@ -402,8 +385,7 @@ async function api(req: IncomingMessage, res: ServerResponse, url: URL) {
       Object.assign(u, hashPassword(b.password as string));
       u.v += 1;
     }
-    saveUsers(users);
-    usersSeen = mtime(join(DATA_DIR, 'users.json'));
+    await store.saveUser(u);
     return send(res, 200, { user: publicUser(u) });
   }
 
@@ -439,12 +421,12 @@ async function api(req: IncomingMessage, res: ServerResponse, url: URL) {
         text: clean,
         from: /^\+?[0-9 ()-]{3,20}$/.test(from.trim()) ? from.trim() : undefined,
       };
-      ingest([sms]);
+      await ingest([sms]);
       return send(res, 200, { ok: true, plain: true, id: sms.id });
     }
     const bad = invalid(r.ev);
     if (bad) return send(res, 422, { ok: false, error: bad });
-    const added = ingest([r.ev]);
+    const added = await ingest([r.ev]);
     return send(res, 200, { ok: true, duplicate: added.length === 0, id: r.ev.id });
   }
 
@@ -498,6 +480,13 @@ const server = createServer(async (req, res) => {
 
 server.listen(PORT, () => {
   console.log(`Rahat server on http://localhost:${PORT} (${box.events.length} events, ${users.length} staff accounts)`);
-  if (!freshUsers().length) console.log('No staff accounts yet. Create the first admin with: npm run create-admin');
+  console.log(`Storage: ${store.kind === 'postgres' ? 'Postgres' : 'JSON files in server/data (development only)'}`);
+  if (!users.length) console.log('No staff accounts yet. Create the first admin with: npm run create-admin');
   if (!process.env.SMS_GATEWAY_TOKEN) console.log('SMS gateway disabled: set SMS_GATEWAY_TOKEN to enable /api/sms.');
 });
+
+for (const sig of ['SIGINT', 'SIGTERM'] as const)
+  process.on(sig, () => {
+    server.close();
+    void store.close().finally(() => process.exit(0));
+  });
