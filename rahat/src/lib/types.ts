@@ -110,6 +110,11 @@ export type TeamStatus = Base & {
   rescued?: number; // people rescued or evacuated, reported when the task is done
 };
 
+/** A text message that reached the control room phone but was not in the coded format. */
+export type SmsText = Base & { type: 'sms.text'; from?: string; text: string };
+/** The officer dealt with a plain SMS (called back, or created the request by hand). */
+export type SmsHandled = Base & { type: 'sms.handled'; smsId: string };
+
 /** A truck's or team's position, sent every minute or so while they share location. */
 export type UnitLocation = Base & { type: 'unit.location'; unit: string; lat: number; lng: number; acc?: number };
 
@@ -126,7 +131,9 @@ export type Ev =
   | DispatchReceive
   | TeamTask
   | TeamStatus
-  | UnitLocation;
+  | UnitLocation
+  | SmsText
+  | SmsHandled;
 
 export const EVENT_TYPES: Ev['type'][] = [
   'camp.report',
@@ -142,6 +149,8 @@ export const EVENT_TYPES: Ev['type'][] = [
   'team.task',
   'team.status',
   'unit.location',
+  'sms.text',
+  'sms.handled',
 ];
 
 export function newId(len = 10): string {

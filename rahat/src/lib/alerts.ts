@@ -7,12 +7,13 @@ import { distanceM, hoursSince, km } from './format.ts';
 export type Alert = {
   id: string;
   level: 'red' | 'amber';
-  kind: 'unverified' | 'silent' | 'quiet' | 'urgent' | 'blocked' | 'missing' | 'code' | 'unconfirmed' | 'shortage' | 'duplicate';
+  kind: 'sms' | 'unverified' | 'silent' | 'quiet' | 'urgent' | 'blocked' | 'missing' | 'code' | 'unconfirmed' | 'shortage' | 'duplicate';
   title: string;
   detail: string;
   campId?: string;
   dispatchId?: string;
-  action?: 'send_team' | 'carry';
+  action?: 'send_team' | 'carry' | 'sms_done';
+  smsId?: string;
 };
 
 const UNCONFIRMED_AFTER_H = 3;
@@ -78,6 +79,17 @@ export function buildAlerts(s: State, now: number): Alert[] {
   const activeTasks = [...s.tasks.values()].filter((t) => t.status !== 'done');
   const teamFor = (campId: string) => activeTasks.find((t) => t.campId === campId);
   const camps = [...s.camps.values()];
+
+  for (const m of s.smsInbox)
+    out.push({
+      id: `sms-${m.id}`,
+      level: 'red',
+      kind: 'sms',
+      title: `Text message${m.from ? ` from ${m.from}` : ''}, ${Math.max(1, Math.round((now - m.at) / 60_000))} min ago`,
+      detail: `"${m.text}" Call back to get the location and numbers, then mark it handled.`,
+      action: 'sms_done',
+      smsId: m.id,
+    });
 
   for (const c of camps) {
     const h = hoursSince(c.lastSeen, now);

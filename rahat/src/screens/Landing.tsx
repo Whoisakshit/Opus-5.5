@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
 import type { Icon } from '@phosphor-icons/react';
-import { ArrowDown, ArrowRight, ChatText, QrCode, WifiHigh } from '@phosphor-icons/react';
+import { ArrowDown, ArrowRight, BatteryHigh, ChatText, Drop, Mountains, QrCode, WifiHigh } from '@phosphor-icons/react';
 import { DISTRICT } from '../lib/config.ts';
 import { myCampIds } from '../lib/store.ts';
 
@@ -30,6 +30,39 @@ const CHANNELS: { icon: Icon; bars: number; title: string; text: string }[] = [
   { icon: WifiHigh, bars: 4, title: 'Internet', text: 'Sent straight away. If the network drops halfway, it is kept and sent again.' },
   { icon: ChatText, bars: 1, title: 'Phone signal only', text: 'One short text message carries your whole request to the control room.' },
   { icon: QrCode, bars: 0, title: 'No signal at all', text: 'Show a QR code to any relief truck or rescue team. Their phone carries it out.' },
+];
+
+const GUIDES: { icon: Icon; title: string; points: string[] }[] = [
+  {
+    icon: Drop,
+    title: 'In a flood',
+    points: [
+      'Move to higher ground or an upper floor early. Do not wait for the water to rise.',
+      'Do not walk, swim or drive through flood water. Even shallow moving water can sweep you away.',
+      'Stay away from electric poles and fallen wires. Switch off power at the main if it is safe.',
+      'Drink only boiled, filtered or sealed bottled water.',
+    ],
+  },
+  {
+    icon: Mountains,
+    title: 'Near hills and slopes',
+    points: [
+      'In heavy rain, stay away from steep slopes, river banks and the foot of hills.',
+      'Watch for new cracks in the ground or walls, tilting trees or poles, muddy water in streams, or rumbling.',
+      'If you see these signs, move away from the slope quickly to stable ground.',
+      'After a landslide, keep away from the area. More slides can follow.',
+    ],
+  },
+  {
+    icon: BatteryHigh,
+    title: 'Your phone',
+    points: [
+      'Open this page once while you have signal. After that it opens even with no internet.',
+      'Turn on battery saver and lower the brightness. Keep a power bank if you have one.',
+      'Keep documents and medicines in a waterproof bag, with a written list of family phone numbers.',
+      'Send a quick check-in every few hours so the control room knows you are safe.',
+    ],
+  },
 ];
 
 /** Fades sections in as they scroll into view. IntersectionObserver, not a scroll listener. */
@@ -167,6 +200,39 @@ export function Landing() {
             {cta} <ArrowRight size={18} aria-hidden />
           </a>
         </div>
+      </section>
+
+      <section className="section wrap" id="safety" aria-labelledby="safety-title">
+        <div data-reveal>
+          <p className="eyebrow">Stay safe while you wait</p>
+          <h2 className="section-title" id="safety-title">
+            Simple steps that <em>save lives.</em>
+          </h2>
+        </div>
+        <div className="guides">
+          {GUIDES.map(({ icon: I, title, points }, i) => (
+            <div className="guide" key={title} data-reveal style={stagger(i)}>
+              <div className="guide-head">
+                <span className="channel-icon">
+                  <I size={22} aria-hidden />
+                </span>
+                <h3>{title}</h3>
+              </div>
+              <ul>
+                {points.map((p) => (
+                  <li key={p}>{p}</li>
+                ))}
+              </ul>
+            </div>
+          ))}
+        </div>
+        <p className="help" style={{ marginTop: 18 }} data-reveal>
+          General safety advice. For official guidance, see the{' '}
+          <a href="https://ndma.gov.in/" target="_blank" rel="noreferrer">
+            National Disaster Management Authority
+          </a>
+          . In danger right now? Call <a href="tel:112">112</a>.
+        </p>
       </section>
 
       <footer className="footer">

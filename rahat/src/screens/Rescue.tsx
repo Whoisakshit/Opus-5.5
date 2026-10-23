@@ -6,7 +6,9 @@ import type { State, TaskState } from '../lib/reduce.ts';
 import { currentLoad, isArrived } from '../lib/reduce.ts';
 import { record, useStore } from '../lib/store.ts';
 import { carrierLabel } from '../lib/config.ts';
-import { ago } from '../lib/format.ts';
+import { ago, distanceM, km } from '../lib/format.ts';
+import type { MapPoint } from '../components/Dashboard.tsx';
+import { DashStats, FocusMap, NewAlert, useNewItems } from '../components/Dashboard.tsx';
 import { DeliverBox, LiveLocation, RelayCard, TakeLoad } from '../components/Field.tsx';
 import { Badge, Empty, Notice, NumberInput, QtyView, useNow } from '../components/ui.tsx';
 
@@ -21,6 +23,10 @@ const KIND: Record<TaskKind, string> = {
 export function RescueScreen({ unit, asAdmin }: { unit?: string; asAdmin?: boolean }) {
   const { state } = useStore('staff');
   const now = useNow();
+  const tasks = [...state.tasks.values()].filter((t) => t.teamId === unit).sort((a, b) => b.createdAt - a.createdAt);
+  const active = tasks.filter((t) => t.status !== 'done');
+  // Tasks the officer sent since this phone last looked. The admin looking in does not clear them.
+  const { fresh, markSeen } = useNewItems(`${asAdmin ? 'admin:' : ''}task:${unit}`, active.map((t) => t.id));
   const team = state.teams.find((t) => t.id === unit);
   if (!team)
     return (
@@ -28,55 +34,83 @@ export function RescueScreen({ unit, asAdmin }: { unit?: string; asAdmin?: boole
         <Notice tone="amber">Your account is not linked to a team. Ask the control room to set one in Staff accounts.</Notice>
       </div>
     );
-  const tasks = [...state.tasks.values()].filter((t) => t.teamId === team.id).sort((a, b) => b.createdAt - a.createdAt);
-  const active = tasks.filter((t) => t.status !== 'done');
-  const past = tasks.filter((t) => t.status === 'done').slice(0, 3);
+  const past = tasks.filter((t) => t.status === 'done').slice(0, 4);
+  const next = active[active.length - 1] ? state.camps.get(active[active.length - 1].campId) : undefined;
+  const live = team.live && now - team.live.at < 30 * 60_000 ? team.live : undefined;
+  const points: MapPoint[] = active.flatMap((t) => {
+    const c = state.camps.get(t.campId);
+    return c ? [{ id: t.id, lat: c.lat, lng: c.lng, label: c.name, tone: c.report.medical || c.report.trapped ? ('red' as const) : ('blue' as const) }] : [];
+  });
 
   return (
     <div className="page">
-      <div className="wrap narrow stack">
-        <div className="row-between" style={{ alignItems: 'flex-end' }}>
-          <div>
-            <h1 className="page-title">{team.label}</h1>
-            <p className="page-sub">
-              {team.lead}. {team.rescued > 0 ? `${team.rescued} people rescued or evacuated so far.` : 'Tasks from the control room appear here.'}
-            </p>
-          </div>
+      <div className="wrap stack">
+        <NewAlert
+          count={fresh.length}
+          title={fresh.length === 1 ? 'New task from the district control room' : `${fresh.length} new tasks from the district control room`}
+          onSeen={markSeen}
+        >
+          {fresh
+            .map((id) => state.tasks.get(id))
+            .map((t) => t && `${KIND[t.kind]} at ${state.camps.get(t.campId)?.name ?? t.campId}`)
+            .filter(Boolean)
+            .join('. ')}
+          .
+        </NewAlert>
+
+        <div>
+          <h1 className="page-title">{team.label}</h1>
+          <p className="page-sub">{team.lead}. Tasks from the district control room appear here as soon as they are sent.</p>
         </div>
 
-        {!asAdmin && <LiveLocation role="rescue" unit={team.id} />}
+        <DashStats
+          items={[
+            { value: active.length, label: 'Active tasks', dot: fresh.length > 0 },
+            { value: team.rescued, label: 'People rescued', tone: team.rescued ? 'green' : undefined },
+            { value: tasks.length - active.length, label: 'Tasks done' },
+            { value: next && live ? km(distanceM(live.lat, live.lng, next.lat, next.lng)) : '-', label: next ? `To ${next.name}` : 'No destination' },
+          ]}
+        />
 
-        <section className="stack-sm" aria-labelledby="tasks-title">
-          <h2 className="card-title" id="tasks-title">
-            <PersonSimpleHike size={20} aria-hidden /> Your task
-          </h2>
-          {active.length === 0 && <Empty title="No task right now">The control room will assign one. Stay ready at base.</Empty>}
-          {active.map((t) => (
-            <TaskCard key={t.id} task={t} state={state} now={now} />
-          ))}
-        </section>
-
-        <RelayCard role={ROLE} state={state} />
-
-        {past.length > 0 && (
-          <section className="stack-sm" aria-labelledby="past-title">
-            <h2 className="card-title" id="past-title">Finished</h2>
-            {past.map((t) => (
-              <div className="card card-pad" key={t.id}>
-                <span className="item-title">{state.camps.get(t.campId)?.name ?? t.campId}</span>
-                <p className="small muted">
-                  {KIND[t.kind]}. Done {ago(t.updatedAt, now)}.{t.rescued ? ` ${t.rescued} people rescued or evacuated.` : ''}
-                </p>
-              </div>
-            ))}
-          </section>
-        )}
+        <div className="dash">
+          <div className="stack">
+            <section className="stack-sm" aria-labelledby="tasks-title">
+              <h2 className="card-title" id="tasks-title">
+                <PersonSimpleHike size={20} aria-hidden /> Your tasks
+              </h2>
+              {active.length === 0 && <Empty title="No task right now">The control room will send one here. Stay ready at base.</Empty>}
+              {active.map((t) => (
+                <TaskCard key={t.id} task={t} state={state} now={now} isNew={fresh.includes(t.id)} />
+              ))}
+            </section>
+            {past.length > 0 && (
+              <section className="stack-sm" aria-labelledby="past-title">
+                <h2 className="card-title" id="past-title">Finished</h2>
+                {past.map((t) => (
+                  <div className="card card-pad" key={t.id}>
+                    <span className="item-title">{state.camps.get(t.campId)?.name ?? t.campId}</span>
+                    <p className="small muted">
+                      {KIND[t.kind]}. Done {ago(t.updatedAt, now)}.{t.rescued ? ` ${t.rescued} people rescued or evacuated.` : ''}
+                    </p>
+                  </div>
+                ))}
+              </section>
+            )}
+          </div>
+          <div className="stack dash-side">
+            <section className="card map-card" aria-label="Where to go">
+              <FocusMap points={points} me={live} />
+            </section>
+            {!asAdmin && <LiveLocation role="rescue" unit={team.id} />}
+            <RelayCard role={ROLE} state={state} />
+          </div>
+        </div>
       </div>
     </div>
   );
 }
 
-function TaskCard({ task, state, now }: { task: TaskState; state: State; now: number }) {
+function TaskCard({ task, state, now, isNew }: { task: TaskState; state: State; now: number; isNew?: boolean }) {
   const camp = state.camps.get(task.campId);
   const d = task.dispatchId ? state.dispatches.get(task.dispatchId) : undefined;
   const holding = d?.loads.at(-1)?.carrier === task.teamId;
@@ -102,10 +136,17 @@ function TaskCard({ task, state, now }: { task: TaskState; state: State; now: nu
   };
 
   return (
-    <div className="card card-pad stack-sm">
+    <div className={`card card-pad stack-sm${isNew ? ' is-new' : ''}`}>
       <div className="row-between">
         <span className="item-title">{camp?.name ?? task.campId}</span>
-        <Badge tone={task.status === 'on_site' ? 'green' : 'blue'}>{task.status.replace('_', ' ')}</Badge>
+        <span className="row" style={{ gap: 6 }}>
+          {isNew && (
+            <Badge tone="red">
+              <span className="blink-dot inline" aria-hidden /> New
+            </Badge>
+          )}
+          <Badge tone={task.status === 'on_site' ? 'green' : 'blue'}>{task.status.replace('_', ' ')}</Badge>
+        </span>
       </div>
       <p>{KIND[task.kind]}.</p>
       {task.note && <Notice>{task.note}</Notice>}

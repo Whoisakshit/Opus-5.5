@@ -485,3 +485,35 @@ fieldset.plain > legend { margin-bottom: 6px; padding: 0; }
   .drawer { animation: drawer-in 0.28s var(--ease); }
   @keyframes drawer-in { from { transform: translateX(32px); opacity: 0; } to { transform: none; opacity: 1; } }
 }
+
+/* ---------- role dashboards */
+.dash { display: grid; gap: 20px; align-items: start; }
+@media (min-width: 1024px) {
+  .dash { grid-template-columns: minmax(0, 1.35fr) minmax(360px, 1fr); gap: 24px; }
+  .dash-side { position: sticky; top: 84px; }
+}
+.dash > * { min-width: 0; }
+.map-focus { height: 300px; }
+@media (min-width: 1024px) { .map-focus { height: 340px; } }
+.new-alert { display: flex; align-items: center; gap: 12px; padding: 14px 16px; border-radius: var(--r-card); background: var(--red-soft); border: 1px solid var(--red-line); color: var(--red); }
+.new-alert > svg { flex: none; }
+.new-alert-body { flex: 1; min-width: 0; color: var(--ink); }
+.new-alert-body b { display: block; color: var(--red); }
+.blink-dot { flex: none; width: 10px; height: 10px; border-radius: 999px; background: var(--red); position: relative; }
+.blink-dot.inline { display: inline-block; width: 8px; height: 8px; vertical-align: middle; margin-left: 6px; }
+.badge .blink-dot.inline { margin: 0 2px 0 0; }
+.card.is-new { border-color: var(--red-line); box-shadow: 0 0 0 3px var(--red-soft), var(--shadow); }
+@media (prefers-reduced-motion: no-preference) {
+  .blink-dot::after { content: ''; position: absolute; inset: 0; border-radius: inherit; background: var(--red); animation: ping 1.6s cubic-bezier(0, 0, 0.2, 1) infinite; }
+  .blink-dot { animation: blink 1.6s ease-in-out infinite; }
+  @keyframes blink { 50% { opacity: 0.45; } }
+}
+
+/* ---------- safety guidelines */
+.guides { display: grid; gap: 16px; margin-top: 40px; }
+@media (min-width: 900px) { .guides { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 24px; } }
+.guide { background: var(--surface); border: 1px solid var(--accent-line); border-radius: 12px; padding: 24px; }
+.guide-head { display: flex; align-items: center; gap: 12px; }
+.guide h3 { font-size: 19px; font-weight: 500; letter-spacing: -0.01em; }
+.guide ul { margin: 16px 0 0; padding-left: 18px; display: grid; gap: 9px; color: var(--ink-2); font-size: 14.5px; line-height: 1.55; }
+.guide li::marker { color: var(--accent); }

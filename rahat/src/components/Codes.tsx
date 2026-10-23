@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import qrcode from 'qrcode-generator';
-import { ChatText, Copy, QrCode, Scan, Stop } from '@phosphor-icons/react';
+import { ChatText, Copy, QrCode, Scan, ShareNetwork, Stop } from '@phosphor-icons/react';
 import type { Channel } from '../lib/types.ts';
 import type { Encodable } from '../lib/codec.ts';
 import { decode, describe, encode, smsParts } from '../lib/codec.ts';
@@ -61,6 +61,16 @@ export function SendOptions({ ev }: { ev: Encodable }) {
         >
           <Copy size={18} aria-hidden /> {copied ? 'Copied' : 'Copy'}
         </button>
+        {'share' in navigator && (
+          <button
+            type="button"
+            className="btn btn-sm"
+            onClick={() => navigator.share({ title: 'Rahat request', text: code }).catch(() => {})}
+            title="Send to a nearby phone. On Android, Quick Share works with no internet."
+          >
+            <ShareNetwork size={18} aria-hidden /> Share nearby
+          </button>
+        )}
         <button type="button" className="btn btn-sm" aria-expanded={showQr} onClick={() => setShowQr((v) => !v)}>
           <QrCode size={18} aria-hidden /> {showQr ? 'Hide QR' : 'Show QR'}
         </button>

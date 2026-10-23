@@ -64,9 +64,14 @@ export function ControlScreen() {
             <h1 className="page-title">Control room</h1>
             <p className="page-sub">What each camp needs, what is on the way, and who is out there.</p>
           </div>
-          <button type="button" className="btn" onClick={() => setSmsOpen(true)}>
-            <ChatText size={18} aria-hidden /> Add SMS report
-          </button>
+          <div className="row">
+            <a className="btn btn-sm btn-quiet" href="/warehouse">Warehouse screen</a>
+            <a className="btn btn-sm btn-quiet" href="/driver">Truck screens</a>
+            <a className="btn btn-sm btn-quiet" href="/rescue">Rescue team screens</a>
+            <button type="button" className="btn" onClick={() => setSmsOpen(true)}>
+              <ChatText size={18} aria-hidden /> Add SMS report
+            </button>
+          </div>
         </div>
 
         <div className="stats" style={{ ['--cols' as string]: 6 }}>
@@ -556,7 +561,16 @@ function AlertsTab({ state, alerts, onSelect }: { state: State; alerts: Alert[];
           </div>
           {(a.action || a.campId) && (
             <div className="row" style={{ paddingLeft: 28 }}>
-              {a.action && (
+              {a.action === 'sms_done' && (
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  onClick={() => record('staff', { type: 'sms.handled', id: newId(), at: Date.now(), by: 'control', smsId: a.smsId! })}
+                >
+                  Mark handled
+                </button>
+              )}
+              {(a.action === 'carry' || a.action === 'send_team') && (
                 <button type="button" className="btn btn-sm" aria-expanded={open === a.id} onClick={() => setOpen(open === a.id ? null : a.id)}>
                   {a.action === 'carry' ? 'Assign a team to carry it' : 'Send rescue team'}
                 </button>

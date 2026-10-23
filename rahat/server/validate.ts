@@ -72,6 +72,10 @@ export function invalid(e: unknown, now = Date.now()): string | null {
         (x.rescued === undefined || int(x.rescued, 10_000))
         ? null
         : 'bad status';
+    case 'sms.text':
+      return str(x.text, 480) && (x.from === undefined || (typeof x.from === 'string' && /^\+?[0-9 ()-]{3,20}$/.test(x.from))) ? null : 'bad sms';
+    case 'sms.handled':
+      return typeof x.smsId === 'string' && EVENT_ID.test(x.smsId) ? null : 'bad sms handled';
     case 'unit.location':
       return id(x.unit) && typeof x.lat === 'number' && typeof x.lng === 'number' && Math.abs(x.lat) <= 90 && Math.abs(x.lng) <= 180 &&
         (x.acc === undefined || int(x.acc, 100_000))

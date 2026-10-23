@@ -60,6 +60,13 @@ The app decides "online / weak / offline" by itself from three signals: the brow
 ### Live tracking
 Drivers and rescue teams share their GPS position while their screen is open: about once a minute, or sooner after moving 150 m. The control room sees each one on the map with a short trail, "last seen" time and distance to its target camp. With no signal, positions wait in the phone's outbox and arrive later as a trail. Browsers pause GPS when the screen locks, so the page asks to keep the screen on; true background tracking needs a native app.
 
+### With no internet at all
+- **The website itself opens offline** once it has been opened one time with signal. The service worker keeps a copy on the phone (production build only; `npm run dev` turns it off so code edits show up). On Android, "Add to Home screen" makes it look like an app.
+- **A phone that never opened the site** can still text the control room number in plain words ("40 people near Kalsi school need food"). The SMS gateway forwards it, and it appears in the control room's Alerts as "Text message from ..." for the officer to call back and mark handled.
+- **Phone to phone with no network:** "Share nearby" on an unsent request uses the phone's own share sheet. On Android, Quick Share sends the request code over Bluetooth or Wi-Fi Direct to a rescue team's phone, which pastes it into "Carry a message". A QR code does the same by camera.
+- **Why not direct Bluetooth inside the web page:** browsers can connect to Bluetooth devices (Web Bluetooth) but cannot make one phone discoverable to another, so a website cannot pair two phones by itself. True phone-to-phone mesh needs a native Android app (Nearby Connections API), which is a possible next step.
+- **An MCP server does not help here.** MCP connects AI assistants to tools; it needs a network and does nothing for a phone with no signal. SMS is the channel that works on the most basic phones and networks.
+
 ### Place name from GPS
 After "Use GPS" (or dropping a pin) the request form fills the place name using OpenStreetMap's free Nominatim service, only when the field is empty or was filled automatically. This sends the coordinates to OpenStreetMap's servers; for a real deployment, run your own Nominatim (free, open source) and point `src/lib/geocode.ts` at it.
 

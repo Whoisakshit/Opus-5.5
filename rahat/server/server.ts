@@ -199,6 +199,7 @@ const ALLOWED: Record<StaffRole, Ev['type'][]> = {
     'dispatch.blocked',
     'dispatch.deliver',
     'team.status',
+    'sms.handled',
   ],
   warehouse: ['stock.in', 'dispatch.pack'],
   driver: ['dispatch.load', 'dispatch.blocked', 'dispatch.deliver', 'unit.location', 'camp.report', 'camp.checkin', 'dispatch.receive'],
@@ -414,14 +415,33 @@ async function api(req: IncomingMessage, res: ServerResponse, url: URL) {
       throw new HttpError(401, 'Gateway token required');
     const raw = await readBody(req);
     let text = '';
+    let from = '';
     try {
       const j = JSON.parse(raw);
       text = String(j.text ?? j.message ?? j.body ?? '');
+      from = String(j.from ?? j.phone ?? j.sender ?? '');
     } catch {
-      text = new URLSearchParams(raw).get('text') ?? raw;
+      const f = new URLSearchParams(raw);
+      text = f.get('text') ?? raw;
+      from = f.get('from') ?? '';
     }
     const r = decode(text, 'sms');
-    if (!r.ok) return send(res, 422, { ok: false, error: r.error });
+    if (!r.ok) {
+      // Not our code: someone texted in their own words. Keep it for the officer to call back.
+      const clean = text.trim().slice(0, 480);
+      if (!clean) return send(res, 422, { ok: false, error: 'Empty message' });
+      const sms: Ev = {
+        type: 'sms.text',
+        id: randomUUID().replace(/-/g, '').slice(0, 20),
+        at: Date.now(),
+        by: 'camp',
+        via: 'sms',
+        text: clean,
+        from: /^\+?[0-9 ()-]{3,20}$/.test(from.trim()) ? from.trim() : undefined,
+      };
+      ingest([sms]);
+      return send(res, 200, { ok: true, plain: true, id: sms.id });
+    }
     const bad = invalid(r.ev);
     if (bad) return send(res, 422, { ok: false, error: bad });
     const added = ingest([r.ev]);

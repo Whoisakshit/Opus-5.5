@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { MouseEvent } from 'react';
 import type { Icon } from '@phosphor-icons/react';
-import { ArrowsClockwise, Broadcast, CloudCheck, CloudSlash, PersonSimpleHike, SignOut, Truck, UsersThree, Warehouse, WifiMedium } from '@phosphor-icons/react';
+import { ArrowLeft, ArrowsClockwise, Broadcast, CloudCheck, CloudSlash, PersonSimpleHike, SignOut, Truck, UsersThree, Warehouse, WifiMedium } from '@phosphor-icons/react';
 import type { StaffRole } from './lib/types.ts';
 import { TEAMS, TRUCKS } from './lib/config.ts';
 import { HOME, loadSession, signOut, useAuth } from './lib/auth.ts';
@@ -24,18 +24,24 @@ type StaffPage = 'control' | 'accounts' | 'warehouse' | 'driver' | 'rescue';
 const STAFF_PAGES: StaffPage[] = ['control', 'accounts', 'warehouse', 'driver', 'rescue'];
 
 const STAFF_NAV: Record<StaffRole, { page: StaffPage; label: string; icon: Icon }[]> = {
-  // The district officer can open every screen; everyone else only their own.
   control: [
     { page: 'control', label: 'Control room', icon: Broadcast },
-    { page: 'warehouse', label: 'Warehouse', icon: Warehouse },
-    { page: 'driver', label: 'Trucks', icon: Truck },
-    { page: 'rescue', label: 'Rescue teams', icon: PersonSimpleHike },
     { page: 'accounts', label: 'Staff', icon: UsersThree },
   ],
   warehouse: [{ page: 'warehouse', label: 'Warehouse', icon: Warehouse }],
   driver: [{ page: 'driver', label: 'My truck', icon: Truck }],
   rescue: [{ page: 'rescue', label: 'My team', icon: PersonSimpleHike }],
 };
+
+/** The district officer can open every screen; everyone else only their own. */
+const ALLOWED: Record<StaffRole, StaffPage[]> = {
+  control: ['control', 'accounts', 'warehouse', 'driver', 'rescue'],
+  warehouse: ['warehouse'],
+  driver: ['driver'],
+  rescue: ['rescue'],
+};
+
+const ROLE_SCREEN: Partial<Record<StaffPage, string>> = { warehouse: 'Warehouse screen', driver: 'Truck screen', rescue: 'Rescue team screen' };
 
 /** Every staff screen has its own address. /login works for everyone. */
 export const PAGE_PATH: Record<StaffPage, string> = {
@@ -111,17 +117,25 @@ function SyncPill() {
 }
 
 function StaffHeader({ role, name, page }: { role: StaffRole; name: string; page?: StaffPage }) {
+  // An officer looking at a warehouse, truck or team screen sees only that screen, plus a way back.
+  const viewing = role === 'control' && page ? ROLE_SCREEN[page] : undefined;
   return (
     <header className="topbar">
       <div className="wrap topbar-in">
         <Brand href={HOME[role]} />
-        <span className="badge">Staff</span>
+        <span className="badge">{viewing ?? 'Staff'}</span>
         <nav className="nav" aria-label="Staff pages">
-          {STAFF_NAV[role].map(({ page: p, label, icon: I }) => (
-            <a key={p} href={PAGE_PATH[p]} aria-current={page === p ? 'page' : undefined}>
-              <I size={17} aria-hidden /> {label}
+          {viewing ? (
+            <a href="/admin">
+              <ArrowLeft size={17} aria-hidden /> Back to control room
             </a>
-          ))}
+          ) : (
+            STAFF_NAV[role].map(({ page: p, label, icon: I }) => (
+              <a key={p} href={PAGE_PATH[p]} aria-current={page === p ? 'page' : undefined}>
+                <I size={17} aria-hidden /> {label}
+              </a>
+            ))
+          )}
         </nav>
         <div className="row staff-tools">
           <SyncPill />
@@ -149,11 +163,11 @@ function AdminView({ kind }: { kind: 'driver' | 'rescue' }) {
   const [unit, setUnit] = useState(units[0].id);
   return (
     <>
-      <div className="wrap narrow" style={{ paddingTop: 24 }}>
+      <div className="wrap" style={{ paddingTop: 20 }}>
         <div className="notice">
           <div className="row-between" style={{ width: '100%' }}>
             <label htmlFor="admin-unit" style={{ fontWeight: 600 }}>
-              Viewing as the control room. {kind === 'driver' ? 'Truck' : 'Team'}:
+              You are seeing what this {kind === 'driver' ? 'truck' : 'team'} sees.
             </label>
             <select id="admin-unit" className="select select-sm" value={unit} onChange={(e) => setUnit(e.target.value)}>
               {units.map((u) => (
@@ -173,11 +187,13 @@ function AdminView({ kind }: { kind: 'driver' | 'rescue' }) {
 function Staff({ page }: { page?: StaffPage }) {
   const auth = useAuth();
   const user = auth.user;
-  const allowed = user ? STAFF_NAV[user.role].map((n) => n.page) : [];
+  const allowed = user ? ALLOWED[user.role] : [];
   const misplaced = !!user && (!page || !allowed.includes(page));
 
   useEffect(() => {
-    if (user) claimStaff(user.id);
+    if (!user) return;
+    claimStaff(user.id);
+    void sync('staff'); // load straight away after sign-in, not on the next 5-second tick
   }, [user]);
   useEffect(() => {
     if (user && misplaced) navigate(HOME[user.role], true);
@@ -192,7 +208,7 @@ function Staff({ page }: { page?: StaffPage }) {
       <main id="main" tabIndex={-1}>
         {page === 'control' && <ControlScreen />}
         {page === 'accounts' && <StaffAccounts me={user.id} />}
-        {page === 'warehouse' && <WarehouseScreen />}
+        {page === 'warehouse' && <WarehouseScreen asAdmin={user.role === 'control'} />}
         {page === 'driver' && (user.role === 'control' ? <AdminView kind="driver" /> : <DriverScreen unit={user.unit} />)}
         {page === 'rescue' && (user.role === 'control' ? <AdminView kind="rescue" /> : <RescueScreen unit={user.unit} />)}
       </main>

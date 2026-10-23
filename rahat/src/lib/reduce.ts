@@ -77,6 +77,7 @@ export type State = {
   tasks: Map<string, TaskState>;
   teams: TeamState[];
   units: Map<string, UnitLive>; // live positions by truck or team id
+  smsInbox: { id: string; at: number; from?: string; text: string }[]; // plain texts not yet handled
   stock: Qty; // physically in the warehouse
   reserved: Qty; // approved but not packed yet
   available: Qty; // what the officer can still allocate
@@ -135,6 +136,8 @@ export function reduce(events: Ev[]): State {
   const evs = sortEvents(events);
   const camps = new Map<string, CampState>();
   const units = new Map<string, UnitLive>();
+  const smsAll = new Map<string, { id: string; at: number; from?: string; text: string }>();
+  const smsDone = new Set<string>();
   const dispatches = new Map<string, DispatchState>();
   const tasks = new Map<string, TaskState>();
   let stockIn = zeroQty();
@@ -258,6 +261,12 @@ export function reduce(events: Ev[]): State {
         }
         break;
       }
+      case 'sms.text':
+        smsAll.set(e.id, { id: e.id, at: e.at, from: e.from, text: e.text });
+        break;
+      case 'sms.handled':
+        smsDone.add(e.smsId);
+        break;
       case 'unit.location': {
         const prev = units.get(e.unit);
         const trail = [...(prev?.trail ?? []), [e.lat, e.lng] as [number, number]].slice(-30);
@@ -308,6 +317,7 @@ export function reduce(events: Ev[]): State {
     tasks,
     teams,
     units,
+    smsInbox: [...smsAll.values()].filter((m) => !smsDone.has(m.id)).sort((a, b) => b.at - a.at),
     stock,
     reserved,
     available: clampQty(subQty(stock, reserved)),
