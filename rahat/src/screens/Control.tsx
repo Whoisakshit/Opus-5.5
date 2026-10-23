@@ -1,0 +1,696 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { ChatText, CheckCircle, MapTrifold, Scales, SealCheck, Warning, WarningCircle, X } from '@phosphor-icons/react';
+import { codeHash, newCode } from '../lib/hash.ts';
+import type { DispatchApprove, Qty, TaskKind, TeamTask } from '../lib/types.ts';
+import { ITEMS, ITEM_META, newId, zeroQty } from '../lib/types.ts';
+import type { CampState, DispatchState, State } from '../lib/reduce.ts';
+import { currentLoad, isArrived, totalQty } from '../lib/reduce.ts';
+import type { Score } from '../lib/allocation.ts';
+import { buildPlan, planStats, priority } from '../lib/allocation.ts';
+import type { Alert } from '../lib/alerts.ts';
+import { buildAlerts } from '../lib/alerts.ts';
+import { QUIET_AFTER_H, SILENT_AFTER_H, carrierLabel } from '../lib/config.ts';
+import { record, useStore } from '../lib/store.ts';
+import { ago, fmtCoord, hoursSince, VIA_LABEL } from '../lib/format.ts';
+import { MapLegend, OpsMap } from '../components/Map.tsx';
+import { CodeReader } from '../components/Codes.tsx';
+import { Badge, Empty, Notice, QtyInputs, QtyView, qtyLine, useNow } from '../components/ui.tsx';
+
+type Tab = 'needs' | 'allocate' | 'tracking' | 'alerts' | 'teams';
+
+export function ControlScreen() {
+  const { state } = useStore('staff');
+  const now = useNow();
+  const [tab, setTab] = useState<Tab>('needs');
+  const [selected, setSelected] = useState<string | undefined>();
+  const [smsOpen, setSmsOpen] = useState(false);
+  const alerts = useMemo(() => buildAlerts(state, now), [state, now]);
+  const red = alerts.filter((a) => a.level === 'red').length;
+
+  const select = useCallback((id?: string) => {
+    setSelected(id);
+    if (id) setTab('needs');
+  }, []);
+
+  const camps = [...state.camps.values()];
+  const needTotal = camps.reduce((acc, c) => {
+    for (const k of ITEMS) acc[k] += c.need[k];
+    return acc;
+  }, zeroQty());
+  const covers = ITEMS.filter((k) => needTotal[k] > 0).map((k) => ({ k, pct: Math.min(100, Math.round((state.available[k] / needTotal[k]) * 100)) }));
+  const lowest = covers.sort((a, b) => a.pct - b.pct)[0];
+  const silent = camps.filter((c) => hoursSince(c.lastSeen, now) >= SILENT_AFTER_H).length;
+
+  const stats = [
+    { value: camps.reduce((s, c) => s + c.people, 0).toLocaleString('en-IN'), label: 'People in camps' },
+    { value: camps.filter((c) => totalQty(c.need) > 0).length, label: 'Camps waiting' },
+    { value: [...state.dispatches.values()].filter((d) => !isArrived(d)).length, label: 'Loads moving' },
+    { value: silent, label: 'Silent camps', red: silent > 0 },
+    { value: lowest ? `${lowest.pct}%` : '100%', label: lowest ? `Stock covers ${ITEM_META[lowest.k].label.toLowerCase()} need` : 'Stock covers all needs', red: !!lowest && lowest.pct < 50 },
+  ];
+
+  const tabs: { id: Tab; label: string; count?: number }[] = [
+    { id: 'needs', label: 'Needs' },
+    { id: 'allocate', label: 'Allocate' },
+    { id: 'tracking', label: 'Tracking' },
+    { id: 'alerts', label: 'Alerts', count: red },
+    { id: 'teams', label: 'Teams' },
+  ];
+
+  return (
+    <div className="page">
+      <div className="wrap stack">
+        <div className="row-between">
+          <div>
+            <h1 className="page-title">Control room</h1>
+            <p className="page-sub">What each camp needs, what is on the way, and who is out there.</p>
+          </div>
+          <button type="button" className="btn" onClick={() => setSmsOpen(true)}>
+            <ChatText size={18} aria-hidden /> Add SMS report
+          </button>
+        </div>
+
+        <div className="stats" style={{ ['--cols' as string]: 5 }}>
+          {stats.map((s) => (
+            <div className="card stat" key={s.label}>
+              <div className={`stat-value${s.red ? ' red' : ''}`}>{s.value}</div>
+              <div className="stat-label">{s.label}</div>
+            </div>
+          ))}
+        </div>
+
+        <div className="ops">
+          <div className="ops-map">
+            <OpsMap state={state} now={now} selected={selected} onSelect={select} />
+            <MapLegend />
+          </div>
+          <section className="card" aria-label="Control panel">
+            <div className="tabs" role="tablist" aria-label="Control room views">
+              {tabs.map((t) => (
+                <button
+                  key={t.id}
+                  role="tab"
+                  id={`tab-${t.id}`}
+                  aria-selected={tab === t.id}
+                  aria-controls={`panel-${t.id}`}
+                  onClick={() => setTab(t.id)}
+                >
+                  {t.label}
+                  {!!t.count && <span className="tab-count" aria-label={`${t.count} urgent`}>{t.count}</span>}
+                </button>
+              ))}
+            </div>
+            <div className="panel-body" role="tabpanel" id={`panel-${tab}`} aria-labelledby={`tab-${tab}`}>
+              {tab === 'needs' && <NeedsTab state={state} now={now} selected={selected} onSelect={select} />}
+              {tab === 'allocate' && <AllocateTab state={state} now={now} />}
+              {tab === 'tracking' && <TrackingTab state={state} now={now} />}
+              {tab === 'alerts' && <AlertsTab state={state} alerts={alerts} onSelect={select} />}
+              {tab === 'teams' && <TeamsTab state={state} now={now} />}
+            </div>
+          </section>
+        </div>
+      </div>
+      {smsOpen && <SmsDialog state={state} onClose={() => setSmsOpen(false)} />}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------- needs
+
+function NeedsTab({ state, now, selected, onSelect }: { state: State; now: number; selected?: string; onSelect: (id?: string) => void }) {
+  const rows = useMemo(
+    () =>
+      [...state.camps.values()]
+        .map((c) => ({ c, score: priority(c, now), open: totalQty(c.need) > 0 }))
+        .sort((a, b) => Number(b.open) - Number(a.open) || b.score.total - a.score.total),
+    [state, now],
+  );
+  if (!rows.length) return <div className="item"><Empty title="No camps yet">Camp reports appear here as soon as they arrive.</Empty></div>;
+  return (
+    <div className="divide">
+      {rows.map(({ c, score }) => (
+        <CampRow key={c.id} c={c} score={score} state={state} now={now} expanded={selected === c.id} onToggle={() => onSelect(selected === c.id ? undefined : c.id)} />
+      ))}
+    </div>
+  );
+}
+
+function CampRow({
+  c,
+  score,
+  state,
+  now,
+  expanded,
+  onToggle,
+}: {
+  c: CampState;
+  score: Score;
+  state: State;
+  now: number;
+  expanded: boolean;
+  onToggle: () => void;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  const h = hoursSince(c.lastSeen, now);
+  const open = totalQty(c.need) > 0;
+  useEffect(() => {
+    if (expanded) ref.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  }, [expanded]);
+
+  return (
+    <div ref={ref}>
+      <button type="button" className="item item-btn" aria-expanded={expanded} onClick={onToggle}>
+        <div className="row-between">
+          <span className="item-title">{c.name}</span>
+          {open ? (
+            <span className={`score${score.total >= 60 ? ' hi' : ''}`} title="Priority score out of 100">
+              {score.total}
+            </span>
+          ) : (
+            <Badge tone="green">Covered</Badge>
+          )}
+        </div>
+        <div className="row" style={{ marginTop: 6, gap: 6 }}>
+          {!c.verified && <Badge tone="amber">New, not verified</Badge>}
+          {h >= SILENT_AFTER_H && <Badge tone="red">Silent {Math.floor(h)} h</Badge>}
+          {h >= QUIET_AFTER_H && h < SILENT_AFTER_H && <Badge tone="amber">Quiet {Math.floor(h)} h</Badge>}
+          {c.report.medical && <Badge tone="red">Medical</Badge>}
+          {c.report.trapped && <Badge tone="red">People trapped</Badge>}
+          {c.report.roadBlocked && <Badge tone="amber">Road blocked</Badge>}
+          {totalQty(c.onTheWay) > 0 && <Badge tone="blue">Load on the way</Badge>}
+        </div>
+        <p className="small muted" style={{ marginTop: 6 }}>
+          {c.people} people. Heard {ago(c.lastSeen, now)}
+          {c.lastSeenVia ? ` by ${VIA_LABEL[c.lastSeenVia]}` : ''}.{open ? ` Still needs ${qtyLine(c.need)}.` : ''}
+        </p>
+      </button>
+      {expanded && <CampDetail c={c} score={score} state={state} now={now} />}
+    </div>
+  );
+}
+
+function CampDetail({ c, score, state, now }: { c: CampState; score: Score; state: State; now: number }) {
+  const [assigning, setAssigning] = useState(false);
+  const r = c.report;
+  const task = [...state.tasks.values()].find((t) => t.campId === c.id && t.status !== 'done');
+  return (
+    <div className="item stack" style={{ background: 'var(--surface-2)' }}>
+      <div className="stack-sm">
+        <p className="label">Why the score is {score.total}</p>
+        {score.parts.map((p) => (
+          <div className="row-between small" key={p.label}>
+            <span>{p.label}</span>
+            <span className="num" style={{ fontWeight: 600 }}>
+              {p.pts} <span className="muted">/ {p.max}</span>
+            </span>
+          </div>
+        ))}
+      </div>
+      <div className="stack-sm">
+        <p className="label">Reported {ago(r.at, now)}</p>
+        <QtyView q={r.needs} />
+        <p className="label">On the way</p>
+        <QtyView q={c.onTheWay} />
+        {totalQty(c.deliveredSince) > 0 && (
+          <>
+            <p className="label">Delivered since the report</p>
+            <QtyView q={c.deliveredSince} />
+          </>
+        )}
+        <p className="label">Still needed</p>
+        <QtyView q={c.need} />
+      </div>
+      <dl className="kv">
+        {(r.reporter || r.phone) && (
+          <>
+            <dt>Contact</dt>
+            <dd>
+              {r.reporter}
+              {r.reporter && r.phone ? ', ' : ''}
+              {r.phone && <a href={`tel:${r.phone.replace(/[^+0-9]/g, '')}`}>{r.phone}</a>}
+            </dd>
+          </>
+        )}
+        <dt>People</dt>
+        <dd>
+          {c.people}: {r.children} children under 5, {r.elderly} elderly, {r.injured} injured or sick
+        </dd>
+        <dt>Location</dt>
+        <dd className="num">
+          {fmtCoord(c.lat, c.lng)}{' '}
+          <span className="muted">
+            ({c.locSrc === 'gps' ? `GPS${c.acc ? `, within ${c.acc} m` : ''}` : c.locSrc === 'map' ? 'map pin' : 'typed'})
+          </span>
+        </dd>
+        <dt>Reports</dt>
+        <dd>
+          {c.reports}, latest by {r.via ? VIA_LABEL[r.via] : 'Internet'}
+        </dd>
+        {r.note && (
+          <>
+            <dt>Note</dt>
+            <dd>{r.note}</dd>
+          </>
+        )}
+        {task && (
+          <>
+            <dt>Team</dt>
+            <dd>
+              {state.teams.find((t) => t.id === task.teamId)?.label}, {task.status.replace('_', ' ')}
+            </dd>
+          </>
+        )}
+      </dl>
+      <div className="row">
+        {!c.verified && (
+          <button
+            type="button"
+            className="btn btn-sm btn-primary"
+            onClick={() => record('staff', { type: 'camp.verify', id: newId(), at: Date.now(), by: 'control', campId: c.id })}
+          >
+            <SealCheck size={17} aria-hidden /> Mark verified
+          </button>
+        )}
+        {!task && (
+          <button type="button" className="btn btn-sm" onClick={() => setAssigning((v) => !v)} aria-expanded={assigning}>
+            Send rescue team
+          </button>
+        )}
+        <a className="btn btn-sm btn-quiet" href={`https://www.openstreetmap.org/?mlat=${c.lat}&mlon=${c.lng}#map=15/${c.lat}/${c.lng}`} target="_blank" rel="noreferrer">
+          <MapTrifold size={17} aria-hidden /> Open in OpenStreetMap
+        </a>
+      </div>
+      {assigning && (
+        <AssignTeam state={state} campId={c.id} defaultKind={r.medical ? 'evacuate' : 'reach'} onDone={() => setAssigning(false)} />
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------- allocate
+
+const sameQty = (a: Qty, b: Qty) => ITEMS.every((k) => a[k] === b[k]);
+
+function AllocateTab({ state, now }: { state: State; now: number }) {
+  const plan = useMemo(() => buildPlan(state, now), [state, now]);
+  const [edits, setEdits] = useState<Record<string, Qty>>({});
+  const [skip, setSkip] = useState<Record<string, boolean>>({});
+  const [reason, setReason] = useState('');
+  const [done, setDone] = useState('');
+
+  // Unconfirmed public requests start unticked: the officer includes them once verified.
+  const rows = plan.rows.map((r) => ({ ...r, include: skip[r.campId] === undefined ? r.verified : !skip[r.campId], give: edits[r.campId] ?? r.suggest }));
+  const final = rows.map((r) => ({ need: r.need, give: r.include ? r.give : zeroQty() }));
+  const stats = planStats(final, state.available);
+  const changed = rows.some((r) => (r.verified && !r.include) || (r.include && !sameQty(r.give, r.suggest)));
+  const loads = rows.filter((r) => r.include && totalQty(r.give) > 0);
+  const blocked = stats.over.length > 0 || (changed && reason.trim().length < 5) || loads.length === 0;
+
+  const approve = async () => {
+    const at = Date.now();
+    for (const r of loads) {
+      const dispatchId = `D-${newId(5).toUpperCase()}`;
+      const code = newCode();
+      const ev: DispatchApprove = {
+        type: 'dispatch.approve',
+        id: newId(),
+        at,
+        by: 'control',
+        dispatchId,
+        campId: r.campId,
+        items: r.give,
+        suggested: r.suggest,
+        mode: r.mode,
+        code,
+        codeHash: await codeHash(dispatchId, code),
+        reason: changed ? reason.trim() : undefined,
+      };
+      record('staff', ev);
+    }
+    setDone(`Approved ${loads.length} load${loads.length === 1 ? '' : 's'}. The warehouse can start packing.`);
+    setEdits({});
+    setSkip({});
+    setReason('');
+  };
+
+  if (!plan.rows.length)
+    return (
+      <div className="item stack-sm">
+        {done && <Notice tone="green">{done}</Notice>}
+        <Empty title="Nothing to allocate">Every camp's reported need is covered or already on the way.</Empty>
+      </div>
+    );
+
+  return (
+    <div className="stack" style={{ padding: 16 }}>
+      {done && <Notice tone="green">{done}</Notice>}
+      <div className="subtle stack-sm">
+        <p className="label" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <Scales size={17} aria-hidden /> Stock against need
+        </p>
+        {ITEMS.map((k) => (
+          <div className="row-between small" key={k}>
+            <span>{ITEM_META[k].label}</span>
+            <span className="num">
+              {plan.totalNeed[k].toLocaleString('en-IN')} needed, {state.available[k].toLocaleString('en-IN')} free
+              {plan.shortBy[k] > 0 && <b style={{ color: 'var(--red)' }}> (short {plan.shortBy[k].toLocaleString('en-IN')})</b>}
+            </span>
+          </div>
+        ))}
+      </div>
+      <p className="small muted">
+        Suggested shares follow the priority score: every camp with a need gets part of the stock, higher scores get more. Change any
+        number before approving. Nothing leaves the warehouse until you approve.
+      </p>
+
+      {rows.map((r) => (
+        <div key={r.campId} className="card card-pad stack-sm" style={{ boxShadow: 'none', opacity: r.include ? 1 : 0.6 }}>
+          <div className="row-between">
+            <label className="row" style={{ fontWeight: 650, cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={r.include}
+                onChange={(e) => setSkip((s) => ({ ...s, [r.campId]: !e.target.checked }))}
+                style={{ width: 18, height: 18, accentColor: 'var(--accent)' }}
+              />
+              {r.name}
+            </label>
+            <span className="row" style={{ gap: 6 }}>
+              {!r.verified && <Badge tone="amber">Not verified</Badge>}
+              {r.stale && <Badge tone="amber">Silent: report may be old</Badge>}
+              <Badge tone={r.mode === 'foot' ? 'amber' : undefined}>{r.mode === 'foot' ? 'On foot' : 'Truck'}</Badge>
+              <span className={`score${r.score.total >= 60 ? ' hi' : ''}`} title="Priority score">{r.score.total}</span>
+            </span>
+          </div>
+          {r.include && (
+            <>
+              <QtyInputs idPrefix={`alloc-${r.campId}`} value={r.give} of={r.need} onChange={(q) => setEdits((e) => ({ ...e, [r.campId]: q }))} />
+              {!sameQty(r.give, r.suggest) && (
+                <button type="button" className="btn btn-sm btn-quiet" style={{ justifySelf: 'start' }} onClick={() =>
+                    setEdits((e) => {
+                      const next = { ...e };
+                      delete next[r.campId];
+                      return next;
+                    })
+                  }
+                >
+                  Back to suggestion ({qtyLine(r.suggest)})
+                </button>
+              )}
+            </>
+          )}
+        </div>
+      ))}
+
+      <div className="subtle stack-sm">
+        <div className="row-between small">
+          <span>Fairness (Jain index, 1.00 means equal share of need)</span>
+          <b className="num">{stats.fairness === null ? 'n/a' : stats.fairness.toFixed(2)}</b>
+        </div>
+        <div className="row-between small">
+          <span>Camps with a need that get nothing</span>
+          <b className="num" style={{ color: stats.campsWithNothing ? 'var(--red)' : 'var(--green)' }}>{stats.campsWithNothing}</b>
+        </div>
+        <div className="row-between small">
+          <span>This plan sends</span>
+          <b>{qtyLine(stats.used)}</b>
+        </div>
+      </div>
+
+      {stats.over.length > 0 && (
+        <Notice tone="red">
+          More {stats.over.map((k) => ITEM_META[k].label.toLowerCase()).join(' and ')} than the warehouse has free. Lower those numbers.
+        </Notice>
+      )}
+      {changed && (
+        <div className="field">
+          <label htmlFor="reason">Why are you changing the suggestion?</label>
+          <textarea id="reason" className="textarea" value={reason} onChange={(e) => setReason(e.target.value)} placeholder="e.g. Kalsi confirmed by phone that 40 more people arrived" />
+          <span className="help">Saved with each load, so every decision can be explained later.</span>
+        </div>
+      )}
+      <button type="button" className="btn btn-primary btn-lg" disabled={blocked} onClick={() => void approve()}>
+        <CheckCircle size={20} aria-hidden /> Approve {loads.length} load{loads.length === 1 ? '' : 's'}
+      </button>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------- tracking
+
+const STAGES = ['Approved', 'Packed', 'On the way', 'Delivered', 'Confirmed'];
+
+export function Stepper({ d }: { d: DispatchState }) {
+  const lastLoad = d.loads.at(-1)?.items;
+  const done = [true, !!d.packed, d.loads.length > 0, !!d.delivered || !!d.received, !!d.received];
+  const bad = [
+    false,
+    !!d.packed && ITEMS.some((k) => d.packed![k] < d.items[k]),
+    d.status === 'blocked',
+    !!d.delivered && !d.delivered.codeOk,
+    !!d.received && !!lastLoad && ITEMS.some((k) => d.received![k] < lastLoad[k]),
+  ];
+  return (
+    <div className="steps" aria-label={`Progress: ${STAGES.filter((_, i) => done[i]).at(-1)}`}>
+      {STAGES.map((s, i) => (
+        <span key={s} className={`step${bad[i] ? ' bad' : done[i] ? ' done' : ''}`}>
+          <i />
+          {s}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function TrackingTab({ state, now }: { state: State; now: number }) {
+  const list = [...state.dispatches.values()].sort((a, b) => b.approvedAt - a.approvedAt);
+  if (!list.length) return <div className="item"><Empty title="No loads yet">Approve loads in the Allocate tab.</Empty></div>;
+  return (
+    <div className="divide">
+      {list.map((d) => {
+        const camp = state.camps.get(d.campId);
+        return (
+          <div className="item" key={d.id}>
+            <div className="row-between">
+              <span className="item-title">{camp?.name ?? d.campId}</span>
+              <span className="mono small muted">{d.id}</span>
+            </div>
+            <p className="small muted" style={{ marginTop: 4 }}>
+              {qtyLine(currentLoad(d))}. Approved {ago(d.approvedAt, now)}.{' '}
+              {d.loads.length > 0 ? `With ${carrierLabel(d.loads.at(-1)!.carrier)}.` : d.mode === 'foot' ? 'Goes on foot.' : ''}
+              {d.reason ? ` Officer note: ${d.reason}` : ''}
+            </p>
+            <Stepper d={d} />
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------- alerts
+
+function AlertsTab({ state, alerts, onSelect }: { state: State; alerts: Alert[]; onSelect: (id?: string) => void }) {
+  const [open, setOpen] = useState<string | null>(null);
+  if (!alerts.length) return <div className="item"><Empty title="No alerts">Silent camps, shortages and missing items show up here.</Empty></div>;
+  return (
+    <div className="divide">
+      {alerts.map((a) => (
+        <div className="item stack-sm" key={a.id}>
+          <div className="row" style={{ alignItems: 'flex-start', flexWrap: 'nowrap' }}>
+            {a.level === 'red' ? (
+              <WarningCircle size={20} weight="fill" color="var(--red)" aria-label="Urgent" style={{ flex: 'none', marginTop: 1 }} />
+            ) : (
+              <Warning size={20} weight="fill" color="var(--amber)" aria-label="Warning" style={{ flex: 'none', marginTop: 1 }} />
+            )}
+            <div style={{ minWidth: 0 }}>
+              <p style={{ fontWeight: 650 }}>{a.title}</p>
+              <p className="small muted">{a.detail}</p>
+            </div>
+          </div>
+          {(a.action || a.campId) && (
+            <div className="row" style={{ paddingLeft: 28 }}>
+              {a.action && (
+                <button type="button" className="btn btn-sm" aria-expanded={open === a.id} onClick={() => setOpen(open === a.id ? null : a.id)}>
+                  {a.action === 'carry' ? 'Assign a team to carry it' : 'Send rescue team'}
+                </button>
+              )}
+              {a.campId && (
+                <button type="button" className="btn btn-sm btn-quiet" onClick={() => onSelect(a.campId)}>
+                  Show camp
+                </button>
+              )}
+            </div>
+          )}
+          {open === a.id && a.campId && (
+            <div style={{ paddingLeft: 28 }}>
+              <AssignTeam
+                state={state}
+                campId={a.campId}
+                dispatchId={a.action === 'carry' ? a.dispatchId : undefined}
+                defaultKind={a.kind === 'urgent' ? 'evacuate' : 'reach'}
+                onDone={() => setOpen(null)}
+              />
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------- teams
+
+const KIND_LABEL: Record<TaskKind, string> = { reach: 'Reach and check', carry: 'Carry supplies on foot', evacuate: 'Evacuate people' };
+
+function TeamsTab({ state, now }: { state: State; now: number }) {
+  return (
+    <div>
+      <div className="divide">
+        {state.teams.map((t) => {
+          const camp = t.task ? state.camps.get(t.task.campId) : undefined;
+          return (
+            <div className="item" key={t.id}>
+              <div className="row-between">
+                <span className="item-title">{t.label}</span>
+                <Badge tone={t.status === 'available' ? 'green' : 'blue'}>{t.status === 'available' ? 'Available' : t.status.replace('_', ' ')}</Badge>
+              </div>
+              <p className="small muted" style={{ marginTop: 4 }}>
+                {t.lead}.{' '}
+                {t.task && camp ? `${KIND_LABEL[t.task.kind]} at ${camp.name}, assigned ${ago(t.task.createdAt, now)}.` : 'At base.'}
+              </p>
+            </div>
+          );
+        })}
+      </div>
+      <div className="item" style={{ borderTop: '1px solid var(--line)' }}>
+        <p className="label" style={{ marginBottom: 10 }}>Send a team</p>
+        <AssignTeam state={state} />
+      </div>
+    </div>
+  );
+}
+
+function AssignTeam({
+  state,
+  campId: fixedCamp,
+  dispatchId,
+  defaultKind = 'reach',
+  onDone,
+}: {
+  state: State;
+  campId?: string;
+  dispatchId?: string;
+  defaultKind?: TaskKind;
+  onDone?: () => void;
+}) {
+  const free = state.teams.filter((t) => t.status === 'available');
+  const camps = [...state.camps.values()].sort((a, b) => a.name.localeCompare(b.name));
+  const [teamId, setTeamId] = useState(free[0]?.id ?? '');
+  const [campId, setCampId] = useState(fixedCamp ?? camps[0]?.id ?? '');
+  const [kind, setKind] = useState<TaskKind>(dispatchId ? 'carry' : defaultKind);
+  const [note, setNote] = useState('');
+  const [sent, setSent] = useState('');
+
+  if (!free.length)
+    return <Notice tone="amber">All teams are on tasks. A team becomes available when it marks its task done.</Notice>;
+
+  const submit = () => {
+    const team = free.find((t) => t.id === teamId) ?? free[0];
+    const ev: TeamTask = {
+      type: 'team.task',
+      id: newId(),
+      at: Date.now(),
+      by: 'control',
+      taskId: `K-${newId(5).toUpperCase()}`,
+      teamId: team.id,
+      campId,
+      kind,
+      dispatchId: kind === 'carry' ? dispatchId : undefined,
+      note: note.trim() || undefined,
+    };
+    record('staff', ev);
+    setSent(`${team.label} assigned.`);
+    setNote('');
+    onDone?.();
+  };
+
+  return (
+    <div className="stack-sm">
+      <div className="grid-2">
+        <div className="field">
+          <label htmlFor={`team-${fixedCamp ?? 'any'}`}>Team</label>
+          <select id={`team-${fixedCamp ?? 'any'}`} className="select" value={teamId} onChange={(e) => setTeamId(e.target.value)}>
+            {free.map((t) => (
+              <option key={t.id} value={t.id}>
+                {t.label}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="field">
+          <label htmlFor={`kind-${fixedCamp ?? 'any'}`}>Task</label>
+          <select id={`kind-${fixedCamp ?? 'any'}`} className="select" value={kind} onChange={(e) => setKind(e.target.value as TaskKind)} disabled={!!dispatchId}>
+            {(Object.keys(KIND_LABEL) as TaskKind[]).map((k) => (
+              <option key={k} value={k} disabled={k === 'carry' && !dispatchId}>
+                {KIND_LABEL[k]}
+              </option>
+            ))}
+          </select>
+        </div>
+      </div>
+      {!fixedCamp && (
+        <div className="field">
+          <label htmlFor="assign-camp">Camp</label>
+          <select id="assign-camp" className="select" value={campId} onChange={(e) => setCampId(e.target.value)}>
+            {camps.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.name}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
+      <div className="field">
+        <label htmlFor={`note-${fixedCamp ?? 'any'}`}>Instructions (optional)</label>
+        <input id={`note-${fixedCamp ?? 'any'}`} className="input" value={note} onChange={(e) => setNote(e.target.value)} placeholder="e.g. Approach from Sahiya side, bridge is out" />
+      </div>
+      <button type="button" className="btn btn-primary" onClick={submit} disabled={!campId}>
+        Assign team
+      </button>
+      {sent && <p className="small" style={{ color: 'var(--green)' }}>{sent}</p>}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------- SMS inbox
+
+function SmsDialog({ state, onClose }: { state: State; onClose: () => void }) {
+  const box = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    box.current?.querySelector('textarea')?.focus();
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+  const ids = useMemo(() => new Set(state.events.map((e) => e.id)), [state]);
+  return (
+    <div className="overlay" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+      <div ref={box} className="card card-pad dialog stack" role="dialog" aria-modal="true" aria-labelledby="sms-title">
+        <div className="row-between">
+          <h2 className="card-title" id="sms-title">
+            <ChatText size={20} aria-hidden /> Add an SMS report
+          </h2>
+          <button type="button" className="btn btn-sm btn-quiet" onClick={onClose} aria-label="Close">
+            <X size={18} aria-hidden />
+          </button>
+        </div>
+        <p className="small muted">
+          Paste a text that reached the control room phone. In the field, a free SMS gateway app on an Android phone forwards these to the
+          server automatically, so this is the manual backup.
+        </p>
+        <CodeReader via="sms" cta="Add to the system" isKnown={(id) => ids.has(id)} onAccept={(ev) => record('staff', ev)} />
+      </div>
+    </div>
+  );
+}

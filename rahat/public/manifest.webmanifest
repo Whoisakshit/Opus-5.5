@@ -1,0 +1,9 @@
+{
+  "name": "Rahat relief coordination",
+  "short_name": "Rahat",
+  "start_url": "/#/camp",
+  "display": "standalone",
+  "background_color": "#f5f8fc",
+  "theme_color": "#fdfeff",
+  "icons": [{ "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }]
+}
