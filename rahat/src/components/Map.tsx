@@ -3,8 +3,8 @@ import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import type { CampState, State } from '../lib/reduce.ts';
 import { totalQty } from '../lib/reduce.ts';
-import { DISTRICT, SILENT_AFTER_H, WAREHOUSE } from '../lib/config.ts';
-import { hoursSince } from '../lib/format.ts';
+import { DISTRICT, SILENT_AFTER_H, TRUCKS, WAREHOUSE } from '../lib/config.ts';
+import { ago, hoursSince } from '../lib/format.ts';
 
 // OpenStreetMap's own tiles: free with attribution, for light use. For a real
 // deployment, host tiles yourself (e.g. a PMTiles file for the district) so the
@@ -111,9 +111,26 @@ export function OpsMap({
           ],
           { color: '#1f6fdf', weight: 2, dashArray: '1 6', lineCap: 'round', interactive: false },
         ).addTo(g);
-      const where = t.status === 'on_site' && camp ? ([camp.lat, camp.lng] as [number, number]) : ([t.lat, t.lng] as [number, number]);
-      const label = t.task && camp ? `${t.label}: ${t.status.replace('_', ' ')} to ${camp.name}` : `${t.label}: available`;
-      L.marker(where, { icon: icon('<span class="pin-team"></span>', 14), keyboard: false }).bindTooltip(text(label)).addTo(g);
+      // A live position shared in the last 30 minutes beats the team's base or its target camp.
+      const live = t.live && now - t.live.at < 30 * 60_000 ? t.live : undefined;
+      const where: [number, number] = live
+        ? [live.lat, live.lng]
+        : t.status === 'on_site' && camp
+          ? [camp.lat, camp.lng]
+          : [t.lat, t.lng];
+      if (live && live.trail.length > 1)
+        L.polyline(live.trail, { color: '#1f6fdf', weight: 2, opacity: 0.45, interactive: false }).addTo(g);
+      const label = `${t.task && camp ? `${t.label}: ${t.status.replace('_', ' ')} to ${camp.name}` : `${t.label}: available`}${live ? `, live ${ago(live.at, now)}` : ''}`;
+      L.marker(where, { icon: icon(`<span class="pin-team${live ? ' is-live' : ''}"></span>`, 14), keyboard: false }).bindTooltip(text(label)).addTo(g);
+    }
+
+    for (const tr of TRUCKS) {
+      const live = state.units.get(tr.id);
+      if (!live || now - live.at > 30 * 60_000) continue;
+      if (live.trail.length > 1) L.polyline(live.trail, { color: '#1f6fdf', weight: 2, opacity: 0.45, interactive: false }).addTo(g);
+      L.marker([live.lat, live.lng], { icon: icon(`<span class="pin-truck">${tr.id}</span>`, 24), keyboard: false })
+        .bindTooltip(text(`${tr.label} (${tr.driver}), live ${ago(live.at, now)}`))
+        .addTo(g);
     }
 
     for (const c of state.camps.values()) {
@@ -156,6 +173,7 @@ export function MapLegend() {
       <span><i className="pin pin-green" style={{ width: 12, height: 12, borderWidth: 2 }} /> Covered</span>
       <span><i className="pin pin-gray" style={{ width: 12, height: 12, borderWidth: 2 }} /> Silent</span>
       <span><i className="pin-team" style={{ display: 'inline-block', width: 10, height: 10, borderWidth: 2 }} /> Rescue team</span>
+      <span><i className="pin-truck" style={{ display: 'inline-block', width: 18, height: 14, fontSize: 8, lineHeight: '10px' }}>T</i> Truck (live)</span>
     </div>
   );
 }

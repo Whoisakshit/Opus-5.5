@@ -1,15 +1,15 @@
-import { useState } from 'react';
-import { CheckCircle, NavigationArrow } from '@phosphor-icons/react';
-import type { DispatchDeliver, DispatchLoad, Qty, Role } from '../lib/types.ts';
+import { useEffect, useRef, useState } from 'react';
+import { CheckCircle, MapPinLine, NavigationArrow } from '@phosphor-icons/react';
+import type { DispatchDeliver, DispatchLoad, Qty, Role, UnitLocation } from '../lib/types.ts';
 import { ITEMS, newId } from '../lib/types.ts';
 import type { CampState, DispatchState, State } from '../lib/reduce.ts';
 import { currentLoad } from '../lib/reduce.ts';
 import { record } from '../lib/store.ts';
 import { codeHash } from '../lib/hash.ts';
 import { WAREHOUSE } from '../lib/config.ts';
-import { distanceM, km } from '../lib/format.ts';
+import { ago, distanceM, km } from '../lib/format.ts';
 import { CodeReader } from './Codes.tsx';
-import { QtyInputs } from './ui.tsx';
+import { QtyInputs, useNow } from './ui.tsx';
 
 /**
  * Proof of delivery. The camp leader holds a 4-digit code and says it only once
@@ -104,6 +104,85 @@ export function RelayCard({ role, state }: { role: Role; state: State }) {
         Passing a camp with no signal? Scan or type its code. Your phone sends it when you are back in range.
       </p>
       <CodeReader via="relay" cta="Carry this message" isKnown={(id) => ids.has(id)} onAccept={(ev) => record('staff', ev)} />
+    </section>
+  );
+}
+
+/**
+ * Live location for a truck or rescue team. While this screen is open the phone
+ * sends its GPS position about once a minute, or sooner after moving 150 m.
+ * With no signal the positions wait in the outbox and arrive later as a trail.
+ * Browsers pause GPS when the screen locks, so we ask to keep the screen on.
+ */
+export function LiveLocation({ role, unit }: { role: 'driver' | 'rescue'; unit: string }) {
+  const key = `rahat:v2:share:${unit}`;
+  const [on, setOn] = useState(() => {
+    try {
+      return localStorage.getItem(key) !== 'off';
+    } catch {
+      return true;
+    }
+  });
+  const [last, setLast] = useState<{ at: number; acc: number } | null>(null);
+  const [error, setError] = useState('');
+  const sent = useRef<{ lat: number; lng: number; at: number } | null>(null);
+  const now = useNow(15_000);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(key, on ? 'on' : 'off');
+    } catch {
+      /* storage unavailable */
+    }
+    if (!on) return;
+    if (!('geolocation' in navigator)) {
+      setError('This phone cannot share its location.');
+      return;
+    }
+    let lock: WakeLockSentinel | undefined;
+    navigator.wakeLock?.request('screen').then((l) => (lock = l)).catch(() => {});
+    const onFix = (p: GeolocationPosition) => {
+      const { latitude: lat, longitude: lng, accuracy } = p.coords;
+      const at = Date.now();
+      const prev = sent.current;
+      if (prev && at - prev.at < 60_000 && distanceM(prev.lat, prev.lng, lat, lng) < 150) return;
+      const ev: UnitLocation = { type: 'unit.location', id: newId(), at, by: role, unit, lat, lng, acc: Math.round(accuracy) };
+      record('staff', ev);
+      sent.current = { lat, lng, at };
+      setLast({ at, acc: Math.round(accuracy) });
+      setError('');
+    };
+    const onError = (e: GeolocationPositionError) =>
+      setError(e.code === e.PERMISSION_DENIED ? 'Location permission is off. Allow it in the browser settings to share your position.' : 'Waiting for a GPS fix…');
+    const opts = { enableHighAccuracy: true, maximumAge: 30_000, timeout: 60_000 };
+    const watch = navigator.geolocation.watchPosition(onFix, onError, opts);
+    // watchPosition only fires on movement; this keeps a once-a-minute heartbeat while standing still.
+    const beat = setInterval(() => navigator.geolocation.getCurrentPosition(onFix, () => {}, opts), 60_000);
+    return () => {
+      navigator.geolocation.clearWatch(watch);
+      clearInterval(beat);
+      void lock?.release().catch(() => {});
+    };
+  }, [on, unit, role, key]);
+
+  return (
+    <section className="card card-pad stack-sm" aria-labelledby={`live-${unit}`}>
+      <div className="row-between">
+        <h2 className="card-title" id={`live-${unit}`}>
+          <MapPinLine size={20} aria-hidden /> Live location
+        </h2>
+        <button type="button" className={`btn btn-sm${on ? '' : ' btn-primary'}`} onClick={() => setOn((v) => !v)} aria-pressed={on}>
+          {on ? 'Stop sharing' : 'Share my location'}
+        </button>
+      </div>
+      <p className="small muted">
+        {on
+          ? last
+            ? `Shared with the control room ${ago(last.at, now)}, accurate to about ${last.acc} m. Keep this screen open.`
+            : 'Getting your position…'
+          : 'Off. The control room cannot see where you are.'}
+      </p>
+      {on && error && <p className="error-text">{error}</p>}
     </section>
   );
 }

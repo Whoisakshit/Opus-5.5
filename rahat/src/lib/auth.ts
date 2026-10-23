@@ -92,8 +92,8 @@ export function useAuth(): Auth {
 }
 
 export const HOME: Record<StaffRole, string> = {
-  control: '#/staff/control',
-  warehouse: '#/staff/warehouse',
-  driver: '#/staff/driver',
-  rescue: '#/staff/rescue',
+  control: '/admin',
+  warehouse: '/warehouse',
+  driver: '/driver',
+  rescue: '/rescue',
 };

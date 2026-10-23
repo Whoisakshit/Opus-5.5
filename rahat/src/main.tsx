@@ -2,6 +2,10 @@ import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { IconContext } from '@phosphor-icons/react';
 import { App } from './App.tsx';
+import { interceptLinks, upgradeHashRoute } from './lib/router.ts';
+
+upgradeHashRoute();
+interceptLinks();
 import '@fontsource-variable/inter';
 import './styles.css';
 

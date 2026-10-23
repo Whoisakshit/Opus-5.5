@@ -32,4 +32,4 @@ export function km(m: number): string {
 
 export const fmtCoord = (lat: number, lng: number) => `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
 
-export const VIA_LABEL = { net: 'Internet', sms: 'SMS', relay: 'Hand-carried' } as const;
+export const VIA_LABEL = { net: 'internet', sms: 'SMS', relay: 'a team carrying it' } as const;

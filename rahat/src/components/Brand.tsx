@@ -1,6 +1,6 @@
 import { Lifebuoy } from '@phosphor-icons/react';
 
-export function Brand({ href = '#/' }: { href?: string }) {
+export function Brand({ href = '/' }: { href?: string }) {
   return (
     <a href={href} className="brand" aria-label="Rahat home">
       <span className="brand-mark">

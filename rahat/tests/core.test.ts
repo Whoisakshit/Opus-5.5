@@ -136,3 +136,20 @@ test('seed data raises the alerts the control room relies on', async () => {
   const kinds = new Set(buildAlerts(reduce(await seedEvents(now)), now).map((a) => a.kind));
   for (const k of ['silent', 'quiet', 'urgent', 'missing', 'shortage', 'duplicate'] as const) assert.ok(kinds.has(k), k);
 });
+
+test('live positions keep the latest point and a short trail; rescued counts add up per team', () => {
+  const base = Date.UTC(2026, 9, 23, 6, 0);
+  const evs: Ev[] = [];
+  for (let i = 0; i < 40; i++)
+    evs.push({ type: 'unit.location', id: `loc${String(i).padStart(4, '0')}x`, at: base + i * 60_000, by: 'rescue', unit: 'SDRF-A', lat: 30 + i / 1000, lng: 78 });
+  evs.push({ type: 'team.task', id: 'taskaaaaaa', at: base, by: 'control', taskId: 'K-1', teamId: 'SDRF-A', campId: 'MLD', kind: 'evacuate' });
+  evs.push({ type: 'team.status', id: 'statusaaaa', at: base + 3_600_000, by: 'rescue', teamId: 'SDRF-A', taskId: 'K-1', status: 'done', rescued: 23 });
+  const s = reduce(evs);
+  const live = s.units.get('SDRF-A')!;
+  assert.equal(live.lat, 30.039);
+  assert.equal(live.trail.length, 30); // capped
+  const team = s.teams.find((t) => t.id === 'SDRF-A')!;
+  assert.equal(team.rescued, 23);
+  assert.equal(team.status, 'available'); // task done frees the team
+  assert.equal(team.live?.at, base + 39 * 60_000);
+});

@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { MapTrifold, PersonSimpleHike } from '@phosphor-icons/react';
 import type { CampCheckin, TaskKind, TeamStatus } from '../lib/types.ts';
 import { newId } from '../lib/types.ts';
@@ -6,8 +7,8 @@ import { currentLoad, isArrived } from '../lib/reduce.ts';
 import { record, useStore } from '../lib/store.ts';
 import { carrierLabel } from '../lib/config.ts';
 import { ago } from '../lib/format.ts';
-import { DeliverBox, RelayCard, TakeLoad } from '../components/Field.tsx';
-import { Badge, Empty, Notice, QtyView, useNow } from '../components/ui.tsx';
+import { DeliverBox, LiveLocation, RelayCard, TakeLoad } from '../components/Field.tsx';
+import { Badge, Empty, Notice, NumberInput, QtyView, useNow } from '../components/ui.tsx';
 
 const ROLE = 'rescue';
 
@@ -17,7 +18,7 @@ const KIND: Record<TaskKind, string> = {
   evacuate: 'Evacuate people who need care',
 };
 
-export function RescueScreen({ unit }: { unit?: string }) {
+export function RescueScreen({ unit, asAdmin }: { unit?: string; asAdmin?: boolean }) {
   const { state } = useStore('staff');
   const now = useNow();
   const team = state.teams.find((t) => t.id === unit);
@@ -37,9 +38,13 @@ export function RescueScreen({ unit }: { unit?: string }) {
         <div className="row-between" style={{ alignItems: 'flex-end' }}>
           <div>
             <h1 className="page-title">{team.label}</h1>
-            <p className="page-sub">{team.lead}</p>
+            <p className="page-sub">
+              {team.lead}. {team.rescued > 0 ? `${team.rescued} people rescued or evacuated so far.` : 'Tasks from the control room appear here.'}
+            </p>
           </div>
         </div>
+
+        {!asAdmin && <LiveLocation role="rescue" unit={team.id} />}
 
         <section className="stack-sm" aria-labelledby="tasks-title">
           <h2 className="card-title" id="tasks-title">
@@ -60,7 +65,7 @@ export function RescueScreen({ unit }: { unit?: string }) {
               <div className="card card-pad" key={t.id}>
                 <span className="item-title">{state.camps.get(t.campId)?.name ?? t.campId}</span>
                 <p className="small muted">
-                  {KIND[t.kind]}. Done {ago(t.updatedAt, now)}.
+                  {KIND[t.kind]}. Done {ago(t.updatedAt, now)}.{t.rescued ? ` ${t.rescued} people rescued or evacuated.` : ''}
                 </p>
               </div>
             ))}
@@ -75,9 +80,19 @@ function TaskCard({ task, state, now }: { task: TaskState; state: State; now: nu
   const camp = state.camps.get(task.campId);
   const d = task.dispatchId ? state.dispatches.get(task.dispatchId) : undefined;
   const holding = d?.loads.at(-1)?.carrier === task.teamId;
+  const [rescued, setRescued] = useState(0);
 
   const status = (s: TeamStatus['status']) => {
-    const ev: TeamStatus = { type: 'team.status', id: newId(), at: Date.now(), by: ROLE, teamId: task.teamId, taskId: task.id, status: s };
+    const ev: TeamStatus = {
+      type: 'team.status',
+      id: newId(),
+      at: Date.now(),
+      by: ROLE,
+      teamId: task.teamId,
+      taskId: task.id,
+      status: s,
+      rescued: s === 'done' && rescued > 0 ? rescued : undefined,
+    };
     record('staff', ev);
     if (s === 'on_site') {
       // Reaching the camp counts as hearing from it, even if its own phone is dead.
@@ -117,6 +132,14 @@ function TaskCard({ task, state, now }: { task: TaskState; state: State; now: nu
           ) : (
             <p className="small muted">Waiting for the warehouse to pack it.</p>
           )}
+        </div>
+      )}
+
+      {task.status === 'on_site' && (
+        <div className="field" style={{ maxWidth: 260 }}>
+          <label htmlFor={`rescued-${task.id}`}>People rescued or evacuated</label>
+          <NumberInput id={`rescued-${task.id}`} value={rescued} onChange={setRescued} max={10_000} />
+          <span className="help">Leave 0 if this task was only a check or a delivery.</span>
         </div>
       )}
 

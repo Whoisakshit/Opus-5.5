@@ -6,9 +6,9 @@ Coordinates relief between camps, a district control room, a warehouse, truck dr
 
 | Who | Where | Account? |
 |---|---|---|
-| Anyone needing help (camp leader, villager, volunteer) | `/` landing page, `/#/request` | **No.** The phone makes a secret key for its request; only that phone can update it or see its status. |
-| Control room officer (admin) | `/#/staff` then Control room, Staff accounts | Yes. The first one is created on the server with `npm run create-admin`. |
-| Warehouse, drivers, rescue teams | `/#/staff` then their own screen only | Yes. Created by a control room admin on the Staff accounts page. **There is no public sign-up.** |
+| Anyone needing help (camp leader, villager, volunteer) | `/` landing page, `/request` | **No.** The phone makes a secret key for its request; only that phone can update it or see its status. |
+| Control room officer (admin) | `/admin` (Control room), `/admin/staff` (Staff accounts) | Yes. The first one is created on the server with `npm run create-admin`. |
+| Warehouse, drivers, rescue teams | `/warehouse`, `/driver`, `/rescue` (each sees only their own) | Yes. Created by a control room admin on the Staff accounts page. **There is no public sign-up.** |
 
 Each staff member sees only their own screen: a driver sees their assigned truck, a rescue team its own tasks. The server enforces this too, not just the UI: a driver cannot record a delivery for another truck, the warehouse cannot approve loads, a public phone cannot read any camp but its own. Handover codes are sent only to the camp and the control room; carriers' phones hold a hash and check against it.
 
@@ -23,8 +23,8 @@ There is no sign-up page. Accounts are handed out, so nobody can make themselves
    npm run create-admin -- officer "Duty Officer"
    ```
    Press Enter at the password prompt and a strong password is generated and **printed once, right then**. Store it in a password manager. (Or type your own, at least 10 characters.) Passwords are never stored in plain text, never committed to git, and cannot be shown again later.
-2. **Sign in:** open `https://<your-site>/#/staff` (there is deliberately no link to it on the public pages). The admin lands on the Control room.
-3. **Everyone else:** the admin opens **Staff accounts**, enters the person's name, a username, their role (warehouse, driver with a truck, rescue team with a team) and a temporary password, then gives them the username and password in person or by phone. They sign in at the same `/#/staff` address and see only their own screen.
+2. **Sign in:** open `https://<your-site>/admin` (or `/login`; there is deliberately no link on the public pages). The admin lands on the Control room.
+3. **Everyone else:** the admin opens **Staff accounts**, enters the person's name, a username, their role (warehouse, driver with a truck, rescue team with a team) and a temporary password, then gives them the username and password in person or by phone. They sign in at their own address (`/warehouse`, `/driver`, `/rescue`, or `/login`) and see only their own screen.
 4. **Forgotten password or someone leaves:** the admin uses **Reset password** (a new temporary one is shown once) or **Deactivate**. Either signs that person out everywhere.
 
 For local development only, `server/data/dev-credentials.txt` can hold your own test login; the whole `server/data/` folder is in `.gitignore` and must never be committed.
@@ -39,10 +39,29 @@ npm run dev           # app on :4123, proxies /api
 npm test              # unit tests
 ```
 
-Open `http://localhost:4123` for the public site and `http://localhost:4123/#/staff` to sign in. Use `npm run server` (no sample data) for a real deployment.
+Open `http://localhost:4123` for the public site and `http://localhost:4123/admin` to sign in as the control room. Use `npm run server` (no sample data) for a real deployment.
 
 ### Network detection (no manual switch)
 The app decides "online / weak / offline" by itself from three signals: the browser's `navigator.onLine`, the Network Information API (2g, slow-2g, high round-trip time on Android Chrome), and its own sync attempts (failures and slow round trips, which catch "connected but no data"). Offline, everything is saved on the phone and the request page offers SMS and QR. To test it, use your browser's DevTools network throttling or "Offline".
+
+### Addresses
+
+| Path | Who | What |
+|---|---|---|
+| `/` | Public | Landing page |
+| `/request` | Public | Ask for help, then track the request on the same phone |
+| `/login` | Staff | Sign in; you are sent to your own screen |
+| `/admin` | Control room | Needs, Allocate, Tracking, Alerts, Field (live map of teams and trucks) |
+| `/admin/staff` | Control room | Create, deactivate and reset staff accounts |
+| `/warehouse` | Warehouse | Stock, packing, receiving |
+| `/driver` | Drivers | Loads assigned to their truck, delivery with code, live location |
+| `/rescue` | Rescue teams | Tasks from the control room, people rescued, live location |
+
+### Live tracking
+Drivers and rescue teams share their GPS position while their screen is open: about once a minute, or sooner after moving 150 m. The control room sees each one on the map with a short trail, "last seen" time and distance to its target camp. With no signal, positions wait in the phone's outbox and arrive later as a trail. Browsers pause GPS when the screen locks, so the page asks to keep the screen on; true background tracking needs a native app.
+
+### Place name from GPS
+After "Use GPS" (or dropping a pin) the request form fills the place name using OpenStreetMap's free Nominatim service, only when the field is empty or was filled automatically. This sends the coordinates to OpenStreetMap's servers; for a real deployment, run your own Nominatim (free, open source) and point `src/lib/geocode.ts` at it.
 
 ## Deploying for real
 

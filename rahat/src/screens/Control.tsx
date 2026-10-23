@@ -9,9 +9,9 @@ import type { Score } from '../lib/allocation.ts';
 import { buildPlan, planStats, priority } from '../lib/allocation.ts';
 import type { Alert } from '../lib/alerts.ts';
 import { buildAlerts } from '../lib/alerts.ts';
-import { QUIET_AFTER_H, SILENT_AFTER_H, carrierLabel } from '../lib/config.ts';
+import { QUIET_AFTER_H, SILENT_AFTER_H, TRUCKS, carrierLabel } from '../lib/config.ts';
 import { record, useStore } from '../lib/store.ts';
-import { ago, fmtCoord, hoursSince, VIA_LABEL } from '../lib/format.ts';
+import { ago, distanceM, fmtCoord, hoursSince, km, VIA_LABEL } from '../lib/format.ts';
 import { MapLegend, OpsMap } from '../components/Map.tsx';
 import { CodeReader } from '../components/Codes.tsx';
 import { Badge, Empty, Notice, QtyInputs, QtyView, qtyLine, useNow } from '../components/ui.tsx';
@@ -27,10 +27,8 @@ export function ControlScreen() {
   const alerts = useMemo(() => buildAlerts(state, now), [state, now]);
   const red = alerts.filter((a) => a.level === 'red').length;
 
-  const select = useCallback((id?: string) => {
-    setSelected(id);
-    if (id) setTab('needs');
-  }, []);
+  const select = useCallback((id?: string) => setSelected(id), []);
+  const selectedCamp = selected ? state.camps.get(selected) : undefined;
 
   const camps = [...state.camps.values()];
   const needTotal = camps.reduce((acc, c) => {
@@ -46,6 +44,7 @@ export function ControlScreen() {
     { value: camps.filter((c) => totalQty(c.need) > 0).length, label: 'Camps waiting' },
     { value: [...state.dispatches.values()].filter((d) => !isArrived(d)).length, label: 'Loads moving' },
     { value: silent, label: 'Silent camps', red: silent > 0 },
+    { value: state.teams.reduce((n, t) => n + t.rescued, 0), label: 'People rescued' },
     { value: lowest ? `${lowest.pct}%` : '100%', label: lowest ? `Stock covers ${ITEM_META[lowest.k].label.toLowerCase()} need` : 'Stock covers all needs', red: !!lowest && lowest.pct < 50 },
   ];
 
@@ -54,7 +53,7 @@ export function ControlScreen() {
     { id: 'allocate', label: 'Allocate' },
     { id: 'tracking', label: 'Tracking' },
     { id: 'alerts', label: 'Alerts', count: red },
-    { id: 'teams', label: 'Teams' },
+    { id: 'teams', label: 'Field' },
   ];
 
   return (
@@ -70,7 +69,7 @@ export function ControlScreen() {
           </button>
         </div>
 
-        <div className="stats" style={{ ['--cols' as string]: 5 }}>
+        <div className="stats" style={{ ['--cols' as string]: 6 }}>
           {stats.map((s) => (
             <div className="card stat" key={s.label}>
               <div className={`stat-value${s.red ? ' red' : ''}`}>{s.value}</div>
@@ -79,12 +78,12 @@ export function ControlScreen() {
           ))}
         </div>
 
-        <div className="ops">
-          <div className="ops-map">
-            <OpsMap state={state} now={now} selected={selected} onSelect={select} />
-            <MapLegend />
-          </div>
-          <section className="card" aria-label="Control panel">
+        <section className="card map-card" aria-label="Map">
+          <OpsMap state={state} now={now} selected={selected} onSelect={select} className="map-wide" />
+          <MapLegend />
+        </section>
+
+        <section className="card" aria-label="Control panel">
             <div className="tabs" role="tablist" aria-label="Control room views">
               {tabs.map((t) => (
                 <button
@@ -101,15 +100,15 @@ export function ControlScreen() {
               ))}
             </div>
             <div className="panel-body" role="tabpanel" id={`panel-${tab}`} aria-labelledby={`tab-${tab}`}>
-              {tab === 'needs' && <NeedsTab state={state} now={now} selected={selected} onSelect={select} />}
+              {tab === 'needs' && <NeedsTab state={state} now={now} onSelect={select} />}
               {tab === 'allocate' && <AllocateTab state={state} now={now} />}
               {tab === 'tracking' && <TrackingTab state={state} now={now} />}
               {tab === 'alerts' && <AlertsTab state={state} alerts={alerts} onSelect={select} />}
               {tab === 'teams' && <TeamsTab state={state} now={now} />}
             </div>
-          </section>
-        </div>
+        </section>
       </div>
+      {selectedCamp && <CampDrawer c={selectedCamp} state={state} now={now} onClose={() => setSelected(undefined)} />}
       {smsOpen && <SmsDialog state={state} onClose={() => setSmsOpen(false)} />}
     </div>
   );
@@ -117,7 +116,7 @@ export function ControlScreen() {
 
 // ---------------------------------------------------------------- needs
 
-function NeedsTab({ state, now, selected, onSelect }: { state: State; now: number; selected?: string; onSelect: (id?: string) => void }) {
+function NeedsTab({ state, now, onSelect }: { state: State; now: number; onSelect: (id?: string) => void }) {
   const rows = useMemo(
     () =>
       [...state.camps.values()]
@@ -125,66 +124,82 @@ function NeedsTab({ state, now, selected, onSelect }: { state: State; now: numbe
         .sort((a, b) => Number(b.open) - Number(a.open) || b.score.total - a.score.total),
     [state, now],
   );
-  if (!rows.length) return <div className="item"><Empty title="No camps yet">Camp reports appear here as soon as they arrive.</Empty></div>;
+  if (!rows.length) return <div className="tiles"><Empty title="No camps yet">Requests appear here as soon as they arrive.</Empty></div>;
   return (
-    <div className="divide">
-      {rows.map(({ c, score }) => (
-        <CampRow key={c.id} c={c} score={score} state={state} now={now} expanded={selected === c.id} onToggle={() => onSelect(selected === c.id ? undefined : c.id)} />
-      ))}
-    </div>
+    <>
+      <p className="panel-intro">Most urgent first. Priority is a score out of 100. Click a camp to see why, and to verify it or send a team.</p>
+      <div className="tiles">
+        {rows.map(({ c, score, open }) => (
+          <CampCard key={c.id} c={c} score={score} open={open} now={now} onOpen={() => onSelect(c.id)} />
+        ))}
+      </div>
+    </>
   );
 }
 
-function CampRow({
-  c,
-  score,
-  state,
-  now,
-  expanded,
-  onToggle,
-}: {
-  c: CampState;
-  score: Score;
-  state: State;
-  now: number;
-  expanded: boolean;
-  onToggle: () => void;
-}) {
-  const ref = useRef<HTMLDivElement>(null);
+function CampCard({ c, score, open, now, onOpen }: { c: CampState; score: Score; open: boolean; now: number; onOpen: () => void }) {
   const h = hoursSince(c.lastSeen, now);
-  const open = totalQty(c.need) > 0;
-  useEffect(() => {
-    if (expanded) ref.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
-  }, [expanded]);
-
   return (
-    <div ref={ref}>
-      <button type="button" className="item item-btn" aria-expanded={expanded} onClick={onToggle}>
-        <div className="row-between">
-          <span className="item-title">{c.name}</span>
-          {open ? (
-            <span className={`score${score.total >= 60 ? ' hi' : ''}`} title="Priority score out of 100">
-              {score.total}
+    <button type="button" className="tile camp-card" onClick={onOpen}>
+      <div className="row-between" style={{ alignItems: 'flex-start', flexWrap: 'nowrap' }}>
+        <span className="item-title">{c.name}</span>
+        {open ? (
+          <span className={`prio${score.total >= 60 ? ' hi' : ''}`}>
+            Priority <b>{score.total}</b>
+          </span>
+        ) : (
+          <Badge tone="green">Covered</Badge>
+        )}
+      </div>
+      <div className="row" style={{ gap: 6 }}>
+        {!c.verified && <Badge tone="amber">New, not verified</Badge>}
+        {h >= SILENT_AFTER_H && <Badge tone="red">No news for {Math.floor(h)} h</Badge>}
+        {h >= QUIET_AFTER_H && h < SILENT_AFTER_H && <Badge tone="amber">Quiet {Math.floor(h)} h</Badge>}
+        {c.report.medical && <Badge tone="red">Medical</Badge>}
+        {c.report.trapped && <Badge tone="red">People trapped</Badge>}
+        {c.report.roadBlocked && <Badge tone="amber">Road blocked</Badge>}
+        {totalQty(c.onTheWay) > 0 && <Badge tone="blue">Supplies on the way</Badge>}
+      </div>
+      <p className="small muted">
+        {c.people} people. Last message {ago(c.lastSeen, now)}
+        {c.lastSeenVia ? ` by ${VIA_LABEL[c.lastSeenVia]}` : ''}.
+      </p>
+      {open ? (
+        <div className="needs-chips" aria-label="Still needed">
+          {ITEMS.filter((k) => c.need[k] > 0).map((k) => (
+            <span key={k}>
+              <b>{c.need[k].toLocaleString('en-IN')}</b> {ITEM_META[k].label.toLowerCase()}
             </span>
-          ) : (
-            <Badge tone="green">Covered</Badge>
-          )}
+          ))}
         </div>
-        <div className="row" style={{ marginTop: 6, gap: 6 }}>
-          {!c.verified && <Badge tone="amber">New, not verified</Badge>}
-          {h >= SILENT_AFTER_H && <Badge tone="red">Silent {Math.floor(h)} h</Badge>}
-          {h >= QUIET_AFTER_H && h < SILENT_AFTER_H && <Badge tone="amber">Quiet {Math.floor(h)} h</Badge>}
-          {c.report.medical && <Badge tone="red">Medical</Badge>}
-          {c.report.trapped && <Badge tone="red">People trapped</Badge>}
-          {c.report.roadBlocked && <Badge tone="amber">Road blocked</Badge>}
-          {totalQty(c.onTheWay) > 0 && <Badge tone="blue">Load on the way</Badge>}
+      ) : (
+        <p className="small" style={{ color: 'var(--green)' }}>Everything they asked for is on the way or delivered.</p>
+      )}
+    </button>
+  );
+}
+
+function CampDrawer({ c, state, now, onClose }: { c: CampState; state: State; now: number; onClose: () => void }) {
+  const close = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    close.current?.focus();
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+  return (
+    <div className="drawer-overlay" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+      <aside className="drawer" role="dialog" aria-modal="true" aria-labelledby="drawer-title">
+        <div className="drawer-head">
+          <h2 className="card-title" id="drawer-title">
+            {c.name}
+          </h2>
+          <button ref={close} type="button" className="btn btn-sm btn-quiet" onClick={onClose} aria-label="Close">
+            <X size={18} aria-hidden />
+          </button>
         </div>
-        <p className="small muted" style={{ marginTop: 6 }}>
-          {c.people} people. Heard {ago(c.lastSeen, now)}
-          {c.lastSeenVia ? ` by ${VIA_LABEL[c.lastSeenVia]}` : ''}.{open ? ` Still needs ${qtyLine(c.need)}.` : ''}
-        </p>
-      </button>
-      {expanded && <CampDetail c={c} score={score} state={state} now={now} />}
+        <CampDetail key={c.id} c={c} score={priority(c, now)} state={state} now={now} />
+      </aside>
     </div>
   );
 }
@@ -194,9 +209,9 @@ function CampDetail({ c, score, state, now }: { c: CampState; score: Score; stat
   const r = c.report;
   const task = [...state.tasks.values()].find((t) => t.campId === c.id && t.status !== 'done');
   return (
-    <div className="item stack" style={{ background: 'var(--surface-2)' }}>
+    <div className="stack" style={{ padding: 20 }}>
       <div className="stack-sm">
-        <p className="label">Why the score is {score.total}</p>
+        <p className="label">Why the priority is {score.total} out of 100</p>
         {score.parts.map((p) => (
           <div className="row-between small" key={p.label}>
             <span>{p.label}</span>
@@ -296,6 +311,7 @@ function AllocateTab({ state, now }: { state: State; now: number }) {
   const [edits, setEdits] = useState<Record<string, Qty>>({});
   const [skip, setSkip] = useState<Record<string, boolean>>({});
   const [reason, setReason] = useState('');
+  const [trucks, setTrucks] = useState<Record<string, string>>({}); // campId -> chosen truck ('' = any)
   const [done, setDone] = useState('');
 
   // Unconfirmed public requests start unticked: the officer includes them once verified.
@@ -324,6 +340,7 @@ function AllocateTab({ state, now }: { state: State; now: number }) {
         code,
         codeHash: await codeHash(dispatchId, code),
         reason: changed ? reason.trim() : undefined,
+        truck: r.mode === 'truck' && trucks[r.campId] ? trucks[r.campId] : undefined,
       };
       record('staff', ev);
     }
@@ -342,7 +359,7 @@ function AllocateTab({ state, now }: { state: State; now: number }) {
     );
 
   return (
-    <div className="stack" style={{ padding: 16 }}>
+    <div className="stack" style={{ padding: 20 }}>
       {done && <Notice tone="green">{done}</Notice>}
       <div className="subtle stack-sm">
         <p className="label" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -363,8 +380,9 @@ function AllocateTab({ state, now }: { state: State; now: number }) {
         number before approving. Nothing leaves the warehouse until you approve.
       </p>
 
+      <div className="tiles" style={{ padding: 0 }}>
       {rows.map((r) => (
-        <div key={r.campId} className="card card-pad stack-sm" style={{ boxShadow: 'none', opacity: r.include ? 1 : 0.6 }}>
+        <div key={r.campId} className="tile stack-sm" style={{ opacity: r.include ? 1 : 0.6 }}>
           <div className="row-between">
             <label className="row" style={{ fontWeight: 650, cursor: 'pointer' }}>
               <input
@@ -378,8 +396,26 @@ function AllocateTab({ state, now }: { state: State; now: number }) {
             <span className="row" style={{ gap: 6 }}>
               {!r.verified && <Badge tone="amber">Not verified</Badge>}
               {r.stale && <Badge tone="amber">Silent: report may be old</Badge>}
-              <Badge tone={r.mode === 'foot' ? 'amber' : undefined}>{r.mode === 'foot' ? 'On foot' : 'Truck'}</Badge>
-              <span className={`score${r.score.total >= 60 ? ' hi' : ''}`} title="Priority score">{r.score.total}</span>
+              {r.mode === 'foot' ? (
+                <Badge tone="amber">On foot</Badge>
+              ) : (
+                <select
+                  className="select select-sm"
+                  aria-label={`Truck for ${r.name}`}
+                  value={trucks[r.campId] ?? ''}
+                  onChange={(e) => setTrucks((t) => ({ ...t, [r.campId]: e.target.value }))}
+                >
+                  <option value="">Any truck</option>
+                  {TRUCKS.map((t) => (
+                    <option key={t.id} value={t.id}>
+                      {t.label}
+                    </option>
+                  ))}
+                </select>
+              )}
+              <span className={`prio${r.score.total >= 60 ? ' hi' : ''}`}>
+                Priority <b>{r.score.total}</b>
+              </span>
             </span>
           </div>
           {r.include && (
@@ -401,6 +437,7 @@ function AllocateTab({ state, now }: { state: State; now: number }) {
           )}
         </div>
       ))}
+      </div>
 
       <div className="subtle stack-sm">
         <div className="row-between small">
@@ -464,20 +501,28 @@ export function Stepper({ d }: { d: DispatchState }) {
 
 function TrackingTab({ state, now }: { state: State; now: number }) {
   const list = [...state.dispatches.values()].sort((a, b) => b.approvedAt - a.approvedAt);
-  if (!list.length) return <div className="item"><Empty title="No loads yet">Approve loads in the Allocate tab.</Empty></div>;
+  if (!list.length) return <div className="tiles"><Empty title="No loads yet">Approve loads in the Allocate tab.</Empty></div>;
   return (
-    <div className="divide">
+    <>
+    <p className="panel-intro">Every load, newest first. A red step means something went wrong at that stage.</p>
+    <div className="tiles">
       {list.map((d) => {
         const camp = state.camps.get(d.campId);
         return (
-          <div className="item" key={d.id}>
+          <div className="tile" key={d.id}>
             <div className="row-between">
               <span className="item-title">{camp?.name ?? d.campId}</span>
               <span className="mono small muted">{d.id}</span>
             </div>
             <p className="small muted" style={{ marginTop: 4 }}>
               {qtyLine(currentLoad(d))}. Approved {ago(d.approvedAt, now)}.{' '}
-              {d.loads.length > 0 ? `With ${carrierLabel(d.loads.at(-1)!.carrier)}.` : d.mode === 'foot' ? 'Goes on foot.' : ''}
+              {d.loads.length > 0
+                ? `With ${carrierLabel(d.loads.at(-1)!.carrier)}.`
+                : d.mode === 'foot'
+                  ? 'Goes on foot.'
+                  : d.truck
+                    ? `Assigned to ${carrierLabel(d.truck)}.`
+                    : 'Any truck.'}
               {d.reason ? ` Officer note: ${d.reason}` : ''}
             </p>
             <Stepper d={d} />
@@ -485,6 +530,7 @@ function TrackingTab({ state, now }: { state: State; now: number }) {
         );
       })}
     </div>
+    </>
   );
 }
 
@@ -492,11 +538,11 @@ function TrackingTab({ state, now }: { state: State; now: number }) {
 
 function AlertsTab({ state, alerts, onSelect }: { state: State; alerts: Alert[]; onSelect: (id?: string) => void }) {
   const [open, setOpen] = useState<string | null>(null);
-  if (!alerts.length) return <div className="item"><Empty title="No alerts">Silent camps, shortages and missing items show up here.</Empty></div>;
+  if (!alerts.length) return <div className="tiles"><Empty title="No alerts">Silent camps, shortages and missing items show up here.</Empty></div>;
   return (
-    <div className="divide">
+    <div className="tiles">
       {alerts.map((a) => (
-        <div className="item stack-sm" key={a.id}>
+        <div className={`tile stack-sm alert-${a.level}`} key={a.id}>
           <div className="row" style={{ alignItems: 'flex-start', flexWrap: 'nowrap' }}>
             {a.level === 'red' ? (
               <WarningCircle size={20} weight="fill" color="var(--red)" aria-label="Urgent" style={{ flex: 'none', marginTop: 1 }} />
@@ -543,25 +589,66 @@ function AlertsTab({ state, alerts, onSelect }: { state: State; alerts: Alert[];
 
 const KIND_LABEL: Record<TaskKind, string> = { reach: 'Reach and check', carry: 'Carry supplies on foot', evacuate: 'Evacuate people' };
 
+/** Where every team and truck is, from the positions their phones share. */
+function liveText(live: { lat: number; lng: number; at: number } | undefined, now: number, target?: CampState) {
+  if (!live) return 'Not sharing location.';
+  const dist = target ? `, ${km(distanceM(live.lat, live.lng, target.lat, target.lng))} from ${target.name}` : '';
+  return `Last seen ${ago(live.at, now)}${dist}.`;
+}
+
 function TeamsTab({ state, now }: { state: State; now: number }) {
+  const trucks = TRUCKS.map((t) => {
+    const load = [...state.dispatches.values()].find((d) => (d.status === 'in_transit' || d.status === 'blocked') && d.loads.at(-1)?.carrier === t.id);
+    return { ...t, live: state.units.get(t.id), load, camp: load ? state.camps.get(load.campId) : undefined };
+  });
   return (
     <div>
+      <div className="two-col">
+      <div>
+      <p className="item label" style={{ paddingBottom: 0 }}>Rescue teams</p>
       <div className="divide">
         {state.teams.map((t) => {
           const camp = t.task ? state.camps.get(t.task.campId) : undefined;
+          const stale = !t.live || now - t.live.at > 15 * 60_000;
           return (
             <div className="item" key={t.id}>
               <div className="row-between">
                 <span className="item-title">{t.label}</span>
-                <Badge tone={t.status === 'available' ? 'green' : 'blue'}>{t.status === 'available' ? 'Available' : t.status.replace('_', ' ')}</Badge>
+                <span className="row" style={{ gap: 6 }}>
+                  {t.rescued > 0 && <Badge tone="green">{t.rescued} rescued</Badge>}
+                  <Badge tone={t.status === 'available' ? 'green' : 'blue'}>{t.status === 'available' ? 'Available' : t.status.replace('_', ' ')}</Badge>
+                </span>
               </div>
               <p className="small muted" style={{ marginTop: 4 }}>
-                {t.lead}.{' '}
-                {t.task && camp ? `${KIND_LABEL[t.task.kind]} at ${camp.name}, assigned ${ago(t.task.createdAt, now)}.` : 'At base.'}
+                {t.lead}. {t.task && camp ? `${KIND_LABEL[t.task.kind]} at ${camp.name}, assigned ${ago(t.task.createdAt, now)}.` : 'At base.'}
               </p>
+              <p className="small" style={{ marginTop: 2, color: stale ? 'var(--amber)' : 'var(--green)' }}>{liveText(t.live, now, camp)}</p>
             </div>
           );
         })}
+      </div>
+      </div>
+      <div>
+      <p className="item label" style={{ paddingBottom: 0 }}>Trucks</p>
+      <div className="divide">
+        {trucks.map((t) => (
+          <div className="item" key={t.id}>
+            <div className="row-between">
+              <span className="item-title">{t.label}</span>
+              <Badge tone={t.load ? (t.load.status === 'blocked' ? 'red' : 'blue') : 'green'}>
+                {t.load ? (t.load.status === 'blocked' ? 'Road blocked' : 'On the way') : 'Free'}
+              </Badge>
+            </div>
+            <p className="small muted" style={{ marginTop: 4 }}>
+              {t.driver}. {t.camp ? `Carrying ${qtyLine(currentLoad(t.load!))} to ${t.camp.name}.` : 'No load on board.'}
+            </p>
+            <p className="small" style={{ marginTop: 2, color: !t.live || now - t.live.at > 15 * 60_000 ? 'var(--amber)' : 'var(--green)' }}>
+              {liveText(t.live, now, t.camp)}
+            </p>
+          </div>
+        ))}
+      </div>
+      </div>
       </div>
       <div className="item" style={{ borderTop: '1px solid var(--line)' }}>
         <p className="label" style={{ marginBottom: 10 }}>Send a team</p>

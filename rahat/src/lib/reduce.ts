@@ -26,6 +26,7 @@ export type DispatchState = {
   id: string;
   campId: string;
   mode: DispatchApprove['mode'];
+  truck?: string;
   code?: string;
   codeHash: string;
   items: Qty;
@@ -52,7 +53,11 @@ export type TaskState = {
   createdAt: number;
   updatedAt: number;
   status: 'assigned' | 'en_route' | 'on_site' | 'done';
+  rescued: number;
 };
+
+/** Latest shared position of a truck or team, with a short trail. */
+export type UnitLive = { lat: number; lng: number; acc?: number; at: number; trail: [number, number][] };
 
 export type TeamState = {
   id: string;
@@ -62,6 +67,8 @@ export type TeamState = {
   lng: number;
   task?: TaskState;
   status: 'available' | TaskState['status'];
+  live?: UnitLive;
+  rescued: number; // total over all its tasks
 };
 
 export type State = {
@@ -69,6 +76,7 @@ export type State = {
   dispatches: Map<string, DispatchState>;
   tasks: Map<string, TaskState>;
   teams: TeamState[];
+  units: Map<string, UnitLive>; // live positions by truck or team id
   stock: Qty; // physically in the warehouse
   reserved: Qty; // approved but not packed yet
   available: Qty; // what the officer can still allocate
@@ -126,6 +134,7 @@ export function sortEvents(events: Ev[]): Ev[] {
 export function reduce(events: Ev[]): State {
   const evs = sortEvents(events);
   const camps = new Map<string, CampState>();
+  const units = new Map<string, UnitLive>();
   const dispatches = new Map<string, DispatchState>();
   const tasks = new Map<string, TaskState>();
   let stockIn = zeroQty();
@@ -139,6 +148,7 @@ export function reduce(events: Ev[]): State {
         id: e.dispatchId,
         campId: e.campId,
         mode: e.mode,
+        truck: e.truck,
         code: e.code,
         codeHash: e.codeHash,
         items: e.items,
@@ -159,6 +169,7 @@ export function reduce(events: Ev[]): State {
         createdAt: e.at,
         updatedAt: e.at,
         status: 'assigned',
+        rescued: 0,
       });
     }
   }
@@ -243,7 +254,14 @@ export function reduce(events: Ev[]): State {
         if (t && e.at >= t.updatedAt) {
           t.status = e.status;
           t.updatedAt = e.at;
+          if (e.rescued) t.rescued = e.rescued;
         }
+        break;
+      }
+      case 'unit.location': {
+        const prev = units.get(e.unit);
+        const trail = [...(prev?.trail ?? []), [e.lat, e.lng] as [number, number]].slice(-30);
+        units.set(e.unit, { lat: e.lat, lng: e.lng, acc: e.acc, at: e.at, trail });
         break;
       }
     }
@@ -278,7 +296,9 @@ export function reduce(events: Ev[]): State {
     const active = [...tasks.values()]
       .filter((k) => k.teamId === t.id && k.status !== 'done')
       .sort((a, b) => b.createdAt - a.createdAt)[0];
-    return { ...t, task: active, status: active ? active.status : 'available' };
+    const rescued = [...tasks.values()].filter((k) => k.teamId === t.id).reduce((s, k) => s + k.rescued, 0);
+    const live = units.get(t.id);
+    return { ...t, task: active, status: active ? active.status : 'available', live, rescued };
   });
 
   const stock = subQty(stockIn, packedOut);
@@ -287,6 +307,7 @@ export function reduce(events: Ev[]): State {
     dispatches,
     tasks,
     teams,
+    units,
     stock,
     reserved,
     available: clampQty(subQty(stock, reserved)),

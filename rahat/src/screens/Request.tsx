@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import {
   CheckCircle,
@@ -25,6 +25,7 @@ import type { NetState } from '../lib/net.ts';
 import { useNetwork } from '../lib/net.ts';
 import { CONTROL_ROOM_SMS, EMERGENCY, carrierLabel } from '../lib/config.ts';
 import { ago, fmtCoord } from '../lib/format.ts';
+import { placeName } from '../lib/geocode.ts';
 import type { Picked } from '../components/Map.tsx';
 import { LocationPicker } from '../components/Map.tsx';
 import { SendOptions } from '../components/Codes.tsx';
@@ -318,7 +319,23 @@ function ReportForm({ camp, onSent }: { camp?: CampState; onSent: (campId: strin
   const [name, setName] = useState(r?.name ?? '');
   const [reporter, setReporter] = useState(r?.reporter ?? '');
   const [phone, setPhone] = useState(r?.phone ?? '');
-  const [loc, setLoc] = useState<Picked | null>(r ? { lat: r.lat, lng: r.lng, acc: r.acc, src: r.locSrc } : null);
+  const [loc, setLocState] = useState<Picked | null>(r ? { lat: r.lat, lng: r.lng, acc: r.acc, src: r.locSrc } : null);
+  // The name we filled in ourselves. We only replace the field while it is empty or still holds that.
+  const autoName = useRef<string | null>(null);
+  const [named, setNamed] = useState(false);
+  const setLoc = (p: Picked) => {
+    setLocState(p);
+    if (p.src === 'manual') return;
+    void placeName(p.lat, p.lng).then((found) => {
+      if (!found) return;
+      setName((current) => {
+        if (current.trim() && current !== autoName.current) return current;
+        autoName.current = found;
+        setNamed(true);
+        return found;
+      });
+    });
+  };
   const [typing, setTyping] = useState(false);
   const [gps, setGps] = useState<'idle' | 'busy' | string>('idle');
   const [people, setPeople] = useState(camp?.people ?? 0);
@@ -416,7 +433,20 @@ function ReportForm({ camp, onSent }: { camp?: CampState; onSent: (campId: strin
       <div className="grid-2">
         <div className="field" style={{ gridColumn: '1 / -1' }}>
           <label htmlFor="place">Name of the place</label>
-          <input id="place" className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Govt. Inter College, Kalsi" autoComplete="off" />
+          <input
+            id="place"
+            className="input"
+            value={name}
+            onChange={(e) => {
+              setName(e.target.value);
+              setNamed(false);
+            }}
+            placeholder="e.g. Govt. Inter College, Kalsi"
+            autoComplete="off"
+          />
+          <span className="help">
+            {named ? 'Filled in from your location. Correct it if it is not quite right.' : 'Press "Use GPS" below and this fills itself in when there is internet.'}
+          </span>
         </div>
         <div className="field">
           <label htmlFor="reporter">Your name</label>

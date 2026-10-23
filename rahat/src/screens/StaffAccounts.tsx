@@ -230,7 +230,7 @@ function AddUser({ onAdded }: { onAdded: () => void }) {
       {created && (
         <Notice tone="green">
           Created <b>{created.name}</b>. Username <span className="mono">{created.username}</span>, temporary password{' '}
-          <span className="mono">{created.password}</span>. They sign in at <span className="mono">/#/staff</span>.
+          <span className="mono">{created.password}</span>. They sign in at <span className="mono">{location.origin}/login</span>.
         </Notice>
       )}
     </form>

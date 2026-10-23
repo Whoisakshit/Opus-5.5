@@ -46,7 +46,7 @@ export function invalid(e: unknown, now = Date.now()): string | null {
       return qty(x.items) && optStr(x.note, 120) ? null : 'bad stock';
     case 'dispatch.approve':
       return id(x.dispatchId) && id(x.campId) && qty(x.items) && qty(x.suggested) && ['truck', 'foot'].includes(x.mode as string) &&
-        typeof x.code === 'string' && /^\d{4}$/.test(x.code) && typeof x.codeHash === 'string' && /^[0-9a-f]{64}$/.test(x.codeHash) &&
+        (x.truck === undefined || id(x.truck)) && typeof x.code === 'string' && /^\d{4}$/.test(x.code) && typeof x.codeHash === 'string' && /^[0-9a-f]{64}$/.test(x.codeHash) &&
         optStr(x.reason, 500)
         ? null
         : 'bad approval';
@@ -68,8 +68,14 @@ export function invalid(e: unknown, now = Date.now()): string | null {
         ? null
         : 'bad task';
     case 'team.status':
-      return id(x.teamId) && (x.taskId === undefined || id(x.taskId)) && ['en_route', 'on_site', 'done'].includes(x.status as string)
+      return id(x.teamId) && (x.taskId === undefined || id(x.taskId)) && ['en_route', 'on_site', 'done'].includes(x.status as string) &&
+        (x.rescued === undefined || int(x.rescued, 10_000))
         ? null
         : 'bad status';
+    case 'unit.location':
+      return id(x.unit) && typeof x.lat === 'number' && typeof x.lng === 'number' && Math.abs(x.lat) <= 90 && Math.abs(x.lng) <= 180 &&
+        (x.acc === undefined || int(x.acc, 100_000))
+        ? null
+        : 'bad location';
   }
 }

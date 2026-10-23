@@ -63,6 +63,7 @@ export type DispatchApprove = Base & {
   items: Qty;
   suggested: Qty;
   mode: 'truck' | 'foot';
+  truck?: string; // officer's choice of truck; unset means any free truck may take it
   code?: string; // 4-digit handover code; the server only sends it to the camp and the control room
   codeHash: string; // what carriers check the code against
   reason?: string; // required when the officer changes the suggestion
@@ -106,7 +107,11 @@ export type TeamStatus = Base & {
   teamId: string;
   taskId?: string;
   status: 'en_route' | 'on_site' | 'done';
+  rescued?: number; // people rescued or evacuated, reported when the task is done
 };
+
+/** A truck's or team's position, sent every minute or so while they share location. */
+export type UnitLocation = Base & { type: 'unit.location'; unit: string; lat: number; lng: number; acc?: number };
 
 export type Ev =
   | CampReport
@@ -120,7 +125,8 @@ export type Ev =
   | DispatchDeliver
   | DispatchReceive
   | TeamTask
-  | TeamStatus;
+  | TeamStatus
+  | UnitLocation;
 
 export const EVENT_TYPES: Ev['type'][] = [
   'camp.report',
@@ -135,6 +141,7 @@ export const EVENT_TYPES: Ev['type'][] = [
   'dispatch.receive',
   'team.task',
   'team.status',
+  'unit.location',
 ];
 
 export function newId(len = 10): string {

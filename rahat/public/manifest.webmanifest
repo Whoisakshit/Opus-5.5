@@ -1,7 +1,7 @@
 {
   "name": "Rahat relief coordination",
   "short_name": "Rahat",
-  "start_url": "/#/camp",
+  "start_url": "/request",
   "display": "standalone",
   "background_color": "#f5f8fc",
   "theme_color": "#fdfeff",

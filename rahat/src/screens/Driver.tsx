@@ -7,12 +7,12 @@ import { currentLoad } from '../lib/reduce.ts';
 import { record, useStore } from '../lib/store.ts';
 import { TRUCKS } from '../lib/config.ts';
 import { ago } from '../lib/format.ts';
-import { DeliverBox, Directions, RelayCard, TakeLoad } from '../components/Field.tsx';
+import { DeliverBox, Directions, LiveLocation, RelayCard, TakeLoad } from '../components/Field.tsx';
 import { Badge, Empty, Notice, QtyView, qtyLine, useNow } from '../components/ui.tsx';
 
 const ROLE = 'driver';
 
-export function DriverScreen({ unit }: { unit?: string }) {
+export function DriverScreen({ unit, asAdmin }: { unit?: string; asAdmin?: boolean }) {
   const { state } = useStore('staff');
   const now = useNow();
   const truck = TRUCKS.find((t) => t.id === unit);
@@ -23,7 +23,10 @@ export function DriverScreen({ unit }: { unit?: string }) {
       </div>
     );
   const list = [...state.dispatches.values()];
-  const pickups = list.filter((d) => d.status === 'packed' && d.mode === 'truck');
+  // Loads the officer assigned to this truck come first; unassigned ones any truck may take.
+  const pickups = list
+    .filter((d) => d.status === 'packed' && d.mode === 'truck' && (!d.truck || d.truck === truck.id))
+    .sort((a, b) => Number(!!b.truck) - Number(!!a.truck));
   const onTruck = list.filter((d) => (d.status === 'in_transit' || d.status === 'blocked') && d.loads.at(-1)?.carrier === truck.id);
   const delivered = list
     .filter((d) => d.delivered?.carrier === truck.id)
@@ -39,6 +42,8 @@ export function DriverScreen({ unit }: { unit?: string }) {
             <p className="page-sub">Your loads, deliveries, and messages to carry for camps without signal.</p>
           </div>
         </div>
+
+        {!asAdmin && <LiveLocation role="driver" unit={truck.id} />}
 
         <section className="stack-sm" aria-labelledby="on-truck">
           <h2 className="card-title" id="on-truck">
@@ -57,7 +62,7 @@ export function DriverScreen({ unit }: { unit?: string }) {
             <div className="card card-pad stack-sm" key={d.id}>
               <div className="row-between">
                 <span className="item-title">{state.camps.get(d.campId)?.name ?? d.campId}</span>
-                <span className="mono small muted">{d.id}</span>
+                {d.truck ? <Badge tone="blue">Assigned to you</Badge> : <span className="mono small muted">{d.id}</span>}
               </div>
               <TakeLoad role={ROLE} d={d} carrier={truck.id} label={`Load onto ${truck.label}`} />
             </div>

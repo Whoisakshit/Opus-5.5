@@ -66,7 +66,7 @@ export function StaffLogin() {
           </button>
         </form>
         <p className="small muted" style={{ textAlign: 'center' }}>
-          Need help for your camp? <a href="#/request">Request help here</a>, no account needed.
+          Need help for your camp? <a href="/request">Request help here</a>, no account needed.
         </p>
       </div>
     </main>

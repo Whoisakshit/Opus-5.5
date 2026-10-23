@@ -69,8 +69,12 @@ if (!box.events.length && process.env.SEED_DEV_DATA === '1') {
 const ids = new Set(box.events.map((e) => e.id));
 const dispatchCamp = new Map<string, string>(); // dispatchId -> campId
 const taskCamp = new Map<string, string>(); // taskId -> campId
+const dispatchTruck = new Map<string, string>(); // dispatchId -> truck the officer chose
 function index(e: Ev) {
-  if (e.type === 'dispatch.approve') dispatchCamp.set(e.dispatchId, e.campId);
+  if (e.type === 'dispatch.approve') {
+    dispatchCamp.set(e.dispatchId, e.campId);
+    if (e.truck) dispatchTruck.set(e.dispatchId, e.truck);
+  }
   if (e.type === 'team.task') taskCamp.set(e.taskId, e.campId);
 }
 box.events.forEach(index);
@@ -181,10 +185,24 @@ const ip = (req: IncomingMessage) => (req.headers['x-forwarded-for'] as string |
 const CAMP_TYPES = new Set<Ev['type']>(['camp.report', 'camp.checkin', 'dispatch.receive']);
 
 const ALLOWED: Record<StaffRole, Ev['type'][]> = {
-  control: ['dispatch.approve', 'team.task', 'camp.verify', 'camp.report', 'camp.checkin', 'dispatch.receive'],
+  // The district officer may do anything except pretend to be a truck's or team's GPS.
+  control: [
+    'dispatch.approve',
+    'team.task',
+    'camp.verify',
+    'camp.report',
+    'camp.checkin',
+    'dispatch.receive',
+    'stock.in',
+    'dispatch.pack',
+    'dispatch.load',
+    'dispatch.blocked',
+    'dispatch.deliver',
+    'team.status',
+  ],
   warehouse: ['stock.in', 'dispatch.pack'],
-  driver: ['dispatch.load', 'dispatch.blocked', 'dispatch.deliver', 'camp.report', 'camp.checkin', 'dispatch.receive'],
-  rescue: ['team.status', 'dispatch.load', 'dispatch.deliver', 'camp.checkin', 'camp.report', 'dispatch.receive'],
+  driver: ['dispatch.load', 'dispatch.blocked', 'dispatch.deliver', 'unit.location', 'camp.report', 'camp.checkin', 'dispatch.receive'],
+  rescue: ['team.status', 'dispatch.load', 'dispatch.deliver', 'unit.location', 'camp.checkin', 'camp.report', 'dispatch.receive'],
 };
 
 /** Why this staff member may not record this event, or null if they may. Also stamps who did it. */
@@ -193,12 +211,17 @@ function staffRule(u: User, e: Ev): string | null {
   if (CAMP_TYPES.has(e.type)) {
     // Staff only pass camp messages on (typed from an SMS, or scanned from a camp's QR),
     // except a rescue team confirming it reached a camp.
-    const onSite = u.role === 'rescue' && e.type === 'camp.checkin' && e.by === 'rescue';
+    const onSite = (u.role === 'rescue' || u.role === 'control') && e.type === 'camp.checkin' && e.by === 'rescue';
     if (!onSite && (e.by !== 'camp' || (e.via !== 'sms' && e.via !== 'relay'))) return 'camp messages must be relayed';
   } else e.by = u.role;
   if ((e.type === 'dispatch.load' || e.type === 'dispatch.deliver') && u.role !== 'control' && e.carrier !== u.unit)
     return 'you can only act for your own truck or team';
-  if (e.type === 'team.status' && e.teamId !== u.unit) return 'you can only update your own team';
+  if (e.type === 'team.status' && u.role !== 'control' && e.teamId !== u.unit) return 'you can only update your own team';
+  if (e.type === 'unit.location' && e.unit !== u.unit) return 'you can only share your own location';
+  if (e.type === 'dispatch.load' && u.role === 'driver') {
+    const chosen = dispatchTruck.get(e.dispatchId);
+    if (chosen && chosen !== u.unit) return 'this load is assigned to another truck';
+  }
   if (e.type === 'dispatch.receive' && dispatchCamp.get(e.dispatchId) !== e.campId) return 'dispatch is not for that camp';
   e.actor = u.id;
   return null;
@@ -421,10 +444,10 @@ const MIME: Record<string, string> = {
 };
 const SECURITY_HEADERS = {
   'x-content-type-options': 'nosniff',
-  'referrer-policy': 'same-origin',
+  'referrer-policy': 'strict-origin-when-cross-origin', // Nominatim needs to know which site is asking
   'permissions-policy': 'camera=(self), geolocation=(self), microphone=()',
   'content-security-policy':
-    "default-src 'self'; img-src 'self' data: https://tile.openstreetmap.org; style-src 'self' 'unsafe-inline'; connect-src 'self'; media-src 'self' blob:; frame-ancestors 'none'; base-uri 'none'",
+    "default-src 'self'; img-src 'self' data: https://tile.openstreetmap.org; style-src 'self' 'unsafe-inline'; connect-src 'self' https://nominatim.openstreetmap.org; media-src 'self' blob:; frame-ancestors 'none'; base-uri 'none'",
 };
 
 function serveStatic(path: string, res: ServerResponse) {
